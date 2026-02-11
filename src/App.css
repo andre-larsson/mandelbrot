@@ -1,0 +1,133 @@
+.page {
+  min-height: 100vh;
+  padding: 48px clamp(20px, 4vw, 56px) 64px;
+  color: #e9f2ff;
+  background: radial-gradient(circle at top, #1a2b4a 0%, #0b0f1a 48%, #07090f 100%);
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+}
+
+.hero {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.75rem;
+  color: #9cc7ff;
+  margin: 0 0 12px;
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 3vw, 3.3rem);
+  margin: 0 0 12px;
+}
+
+.lede {
+  max-width: 560px;
+  color: #c7d8f5;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.controls {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.btn {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid #6fa6ff;
+  background: linear-gradient(135deg, #4786ff, #85b5ff);
+  color: #07101f;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(71, 134, 255, 0.3);
+}
+
+.btn.ghost {
+  background: transparent;
+  color: #cfe3ff;
+}
+
+.slider {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #d8e6ff;
+}
+
+.slider input {
+  width: min(320px, 70vw);
+}
+
+.slider .value {
+  font-variant-numeric: tabular-nums;
+  color: #9cc7ff;
+}
+
+.canvas-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.canvas-frame {
+  border-radius: 20px;
+  padding: 12px;
+  background: rgba(12, 20, 36, 0.7);
+  border: 1px solid rgba(130, 170, 255, 0.2);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+}
+
+canvas {
+  width: 100%;
+  height: min(70vh, 640px);
+  display: block;
+  border-radius: 12px;
+  cursor: zoom-in;
+}
+
+.meta {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  background: rgba(10, 15, 28, 0.6);
+  padding: 16px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(130, 170, 255, 0.2);
+  color: #c3d7ff;
+}
+
+.meta span {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #89b4ff;
+  margin-bottom: 6px;
+}
+
+.meta strong {
+  font-size: 1rem;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 32px 20px 48px;
+  }
+
+  canvas {
+    height: 50vh;
+  }
+}
