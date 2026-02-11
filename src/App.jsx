@@ -34,6 +34,8 @@ function hslToRgb(h, s, l) {
 function App() {
   const canvasRef = useRef(null)
   const renderIdRef = useRef(0)
+
+  // Single-finger pan state
   const dragRef = useRef({
     active: false,
     pointerId: null,
@@ -44,6 +46,19 @@ function App() {
     startCenterY: 0,
     startZoom: DEFAULT_VIEW.zoom,
   })
+
+  // Multi-touch pinch state
+  const gestureRef = useRef({
+    pointers: new Map(),
+    mode: 'none',
+    startDist: 0,
+    startMid: { x: 0, y: 0 },
+    anchorComplex: { x: 0, y: 0 },
+    startView: DEFAULT_VIEW,
+    pinchMoved: false,
+    pinchStartedAt: 0,
+  })
+
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
@@ -150,30 +165,80 @@ function App() {
     drawChunk()
   }, [size, view])
 
+  const screenToComplex = (rect, x, y, viewLike) => {
+    const scale = 4 / (viewLike.zoom * Math.min(rect.width, rect.height))
+    return {
+      x: (x - rect.width / 2) * scale + viewLike.centerX,
+      y: (y - rect.height / 2) * scale + viewLike.centerY,
+    }
+  }
+
+  const updateCenterFromScreen = (rect, x, y, zoomFactor) => {
+    const anchor = screenToComplex(rect, x, y, view)
+
+    setView((prev) => {
+      const nextZoom = prev.zoom * zoomFactor
+      const nextScale = 4 / (nextZoom * Math.min(rect.width, rect.height))
+      return {
+        ...prev,
+        zoom: nextZoom,
+        centerX: anchor.x - (x - rect.width / 2) * nextScale,
+        centerY: anchor.y - (y - rect.height / 2) * nextScale,
+      }
+    })
+  }
+
   const updateCenterFromPointer = (event, zoomFactor) => {
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
-    const scale = 4 / (view.zoom * Math.min(rect.width, rect.height))
-    const cx = (x - rect.width / 2) * scale + view.centerX
-    const cy = (y - rect.height / 2) * scale + view.centerY
 
-    setView((prev) => ({
-      ...prev,
-      centerX: cx,
-      centerY: cy,
-      zoom: prev.zoom * zoomFactor,
-    }))
+    updateCenterFromScreen(rect, x, y, zoomFactor)
+  }
+
+  const beginPinch = (rect, p1, p2) => {
+    const dx = p2.x - p1.x
+    const dy = p2.y - p1.y
+    const dist = Math.hypot(dx, dy) || 1
+    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+
+    gestureRef.current.mode = 'pinch'
+    gestureRef.current.startDist = dist
+    gestureRef.current.startMid = mid
+    gestureRef.current.startView = view
+    gestureRef.current.anchorComplex = screenToComplex(rect, mid.x, mid.y, view)
+    gestureRef.current.pinchMoved = false
+    gestureRef.current.pinchStartedAt = performance.now()
+
+    dragRef.current.active = false
+    setIsDragging(true)
   }
 
   const handlePointerDown = (event) => {
-    if (event.button !== 0) return
     const canvas = canvasRef.current
     if (!canvas) return
 
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+
     canvas.setPointerCapture(event.pointerId)
+
+    const rect = canvas.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+
+    const g = gestureRef.current
+    g.pointers.set(event.pointerId, { x, y })
+
+    if (g.pointers.size === 2) {
+      const [p1, p2] = Array.from(g.pointers.values())
+      beginPinch(rect, p1, p2)
+      return
+    }
+
+    // start pan with single pointer
+    g.mode = 'pan'
     dragRef.current = {
       active: true,
       pointerId: event.pointerId,
@@ -188,6 +253,48 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const y = event.clientY - rect.top
+
+    const g = gestureRef.current
+    if (g.pointers.has(event.pointerId)) {
+      g.pointers.set(event.pointerId, { x, y })
+    }
+
+    if (g.mode === 'pinch' && g.pointers.size >= 2) {
+      const [p1, p2] = Array.from(g.pointers.values())
+      const dx = p2.x - p1.x
+      const dy = p2.y - p1.y
+      const dist = Math.hypot(dx, dy) || 1
+
+      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+
+      // Detect whether this was a real pinch (not a quick 2-finger tap)
+      const distDelta = Math.abs(dist - (g.startDist || 0))
+      const midDelta = Math.hypot(mid.x - g.startMid.x, mid.y - g.startMid.y)
+      if (distDelta > 8 || midDelta > 8) g.pinchMoved = true
+
+      const ratio = dist / (g.startDist || 1)
+      const nextZoom = Math.max(0.05, g.startView.zoom * ratio)
+      const nextScale = 4 / (nextZoom * Math.min(rect.width, rect.height))
+
+      // Keep the complex coordinate under the pinch midpoint stable.
+      const anchor = g.anchorComplex
+      const nextCenterX = anchor.x - (mid.x - rect.width / 2) * nextScale
+      const nextCenterY = anchor.y - (mid.y - rect.height / 2) * nextScale
+
+      setView((prev) => ({
+        ...prev,
+        zoom: nextZoom,
+        centerX: nextCenterX,
+        centerY: nextCenterY,
+      }))
+      return
+    }
+
     const drag = dragRef.current
     if (!drag.active || drag.pointerId !== event.pointerId) return
 
@@ -198,9 +305,6 @@ function App() {
     }
     if (!drag.moved) return
 
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
     const scale = 4 / (drag.startZoom * Math.min(rect.width, rect.height))
 
     setView((prev) => ({
@@ -211,12 +315,51 @@ function App() {
   }
 
   const finishPointer = (event) => {
-    const drag = dragRef.current
-    if (!drag.active || drag.pointerId !== event.pointerId) return
-
     const canvas = canvasRef.current
+    const g = gestureRef.current
+
+    // Update this pointer position one last time (important for tap gestures).
+    const rect = canvas?.getBoundingClientRect()
+    if (rect && g.pointers.has(event.pointerId)) {
+      g.pointers.set(event.pointerId, {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      })
+    }
+
+    // Snapshot before removing the pointer so we can detect 2-finger tap.
+    const pointersBefore = Array.from(g.pointers.values())
+    const wasPinch = g.mode === 'pinch'
+    const wasTwoFingers = g.pointers.size === 2
+    const pinchMoved = g.pinchMoved
+    const pinchDurationMs = performance.now() - (g.pinchStartedAt || 0)
+
     if (canvas?.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId)
+    }
+    g.pointers.delete(event.pointerId)
+
+    // Two-finger tap to zoom out.
+    if (wasPinch && wasTwoFingers && !pinchMoved && pinchDurationMs < 280 && rect) {
+      const p1 = pointersBefore[0]
+      const p2 = pointersBefore[1]
+      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+      updateCenterFromScreen(rect, mid.x, mid.y, 1 / 1.8)
+    }
+
+    // If we were pinching and one finger lifted, end pinch.
+    if (wasPinch) {
+      if (g.pointers.size >= 2) return
+      g.mode = g.pointers.size === 1 ? 'pan' : 'none'
+      dragRef.current.active = false
+      setIsDragging(false)
+      return
+    }
+
+    const drag = dragRef.current
+    if (!drag.active || drag.pointerId !== event.pointerId) {
+      if (g.pointers.size === 0) setIsDragging(false)
+      return
     }
 
     const didDrag = drag.moved
@@ -230,10 +373,13 @@ function App() {
       startCenterY: 0,
       startZoom: view.zoom,
     }
-    setIsDragging(false)
+
+    g.mode = g.pointers.size > 0 ? 'pan' : 'none'
+    setIsDragging(g.pointers.size > 0)
 
     if (!didDrag) {
-      const zoomFactor = event.shiftKey ? 1 / 1.8 : 1.8
+      // Mouse: shift-click zooms out; Touch: tap zooms in (use buttons or two-finger tap for zoom out).
+      const zoomFactor = event.pointerType === 'mouse' && event.shiftKey ? 1 / 1.8 : 1.8
       updateCenterFromPointer(event, zoomFactor)
     }
   }
@@ -253,9 +399,8 @@ function App() {
         <div>
           <p className="eyebrow">Mandelbrot Explorer</p>
           <p className="lede">
-            Click to zoom in, Shift-click or right-click to zoom out, and drag
-            to pan. Use the controls to adjust iterations or reset back to the
-            classic view.
+            Tap to zoom in, drag to pan, and pinch to zoom on mobile. Two-finger tap zooms out.
+            On desktop: click to zoom, Shift/right-click to zoom out.
           </p>
         </div>
         <div className="controls">
@@ -317,7 +462,7 @@ function App() {
           </div>
           <div>
             <span>Tip</span>
-            <strong>Drag to move. Shift/right-click to zoom out.</strong>
+            <strong>Pinch to zoom. Two-finger tap to zoom out. Drag to move.</strong>
           </div>
         </div>
       </section>
