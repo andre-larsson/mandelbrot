@@ -620,6 +620,25 @@ function App() {
     updateCenterFromPointer(event, 1 / 1.8)
   }
 
+  const handleWheel = (event) => {
+    // Zoom towards cursor position (desktop mouse wheel / trackpad).
+    // Prevent page scroll while interacting with the canvas.
+    event.preventDefault()
+
+    // Normalize delta across browsers/devices.
+    const deltaModeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
+    const delta = event.deltaY * deltaModeScale
+
+    // Exponential zoom feels natural and works well for trackpads.
+    const ZOOM_SENSITIVITY = 0.0015
+    let zoomFactor = Math.exp(-delta * ZOOM_SENSITIVITY)
+
+    // Clamp per-event zoom to avoid wild jumps.
+    zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
+
+    updateCenterFromPointer(event, zoomFactor)
+  }
+
   const zoomIn = () => setView((prev) => ({ ...prev, zoom: prev.zoom * 1.6 }))
   const zoomOut = () => setView((prev) => ({ ...prev, zoom: prev.zoom / 1.6 }))
   const reset = () => setView(DEFAULT_VIEW)
@@ -680,6 +699,7 @@ function App() {
             onPointerUp={finishPointer}
             onPointerCancel={finishPointer}
             onContextMenu={handleCanvasContextMenu}
+            onWheel={handleWheel}
             role="img"
             aria-label="Mandelbrot set"
           />
