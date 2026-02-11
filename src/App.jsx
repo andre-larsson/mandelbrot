@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const DEFAULT_VIEW = {
@@ -7,6 +7,8 @@ const DEFAULT_VIEW = {
   zoom: 1,
   maxIter: 600,
 }
+
+const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -33,7 +35,21 @@ function hslToRgb(h, s, l) {
 
 function App() {
   const canvasRef = useRef(null)
+
+  // Rendering + pan-cache state
   const renderIdRef = useRef(0)
+  const cacheRef = useRef({
+    canvas: null,
+    ctx: null,
+    width: 0,
+    height: 0,
+    dpr: 1,
+    zoom: null,
+    maxIter: null,
+    // complex coordinate at the cache canvas center
+    centerX: 0,
+    centerY: 0,
+  })
 
   // Single-finger pan state
   const dragRef = useRef({
@@ -84,89 +100,262 @@ function App() {
     return () => observer.disconnect()
   }, [])
 
+  const scaleFor = (zoom, pixelW, pixelH) => {
+    return 4 / (zoom * Math.min(pixelW, pixelH))
+  }
+
+  const ensureCache = (pixelW, pixelH, dpr, nextView) => {
+    const cache = cacheRef.current
+
+    const cacheW = Math.floor(pixelW * PAN_CACHE_FACTOR)
+    const cacheH = Math.floor(pixelH * PAN_CACHE_FACTOR)
+
+    const needsNewCanvas =
+      !cache.canvas || cache.width !== cacheW || cache.height !== cacheH || cache.dpr !== dpr
+
+    const needsReset =
+      needsNewCanvas || cache.zoom !== nextView.zoom || cache.maxIter !== nextView.maxIter
+
+    if (needsReset) {
+      const off = document.createElement('canvas')
+      off.width = cacheW
+      off.height = cacheH
+      const ctx = off.getContext('2d', { alpha: false })
+
+      cacheRef.current = {
+        canvas: off,
+        ctx,
+        width: cacheW,
+        height: cacheH,
+        dpr,
+        zoom: nextView.zoom,
+        maxIter: nextView.maxIter,
+        centerX: nextView.centerX,
+        centerY: nextView.centerY,
+      }
+
+      return { reset: true }
+    }
+
+    return { reset: false }
+  }
+
+  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView) => {
+    // rect is in cache-canvas pixel coordinates.
+    const cache = cacheRef.current
+    const { width: cacheW, height: cacheH } = cache
+
+    const img = targetCtx.createImageData(rect.w, rect.h)
+    const data = img.data
+
+    const scale = scaleFor(nextView.zoom, pixelW, pixelH)
+    const maxIter = nextView.maxIter
+
+    // Map cache pixel -> complex using cache center.
+    const halfCacheW = cacheW / 2
+    const halfCacheH = cacheH / 2
+
+    for (let j = 0; j < rect.h; j += 1) {
+      const py = rect.y + j
+      const cy = (py - halfCacheH) * scale + cache.centerY
+      for (let i = 0; i < rect.w; i += 1) {
+        const px = rect.x + i
+        const cx = (px - halfCacheW) * scale + cache.centerX
+
+        let zx = 0
+        let zy = 0
+        let iter = 0
+
+        while (zx * zx + zy * zy <= 4 && iter < maxIter) {
+          const xtemp = zx * zx - zy * zy + cx
+          zy = 2 * zx * zy + cy
+          zx = xtemp
+          iter += 1
+        }
+
+        const offset = (j * rect.w + i) * 4
+        if (iter >= maxIter) {
+          data[offset] = 5
+          data[offset + 1] = 10
+          data[offset + 2] = 16
+          data[offset + 3] = 255
+        } else {
+          const logZn = Math.log(zx * zx + zy * zy) / 2
+          const nu = Math.log(logZn / Math.LN2) / Math.LN2
+          const smooth = iter + 1 - nu
+          const t = smooth / maxIter
+          const hue = 210 + 140 * t
+          const sat = 0.75
+          const light = 0.3 + 0.5 * t
+          const [r, g, b] = hslToRgb(hue % 360, sat, light)
+          data[offset] = r
+          data[offset + 1] = g
+          data[offset + 2] = b
+          data[offset + 3] = 255
+        }
+      }
+    }
+
+    targetCtx.putImageData(img, rect.x, rect.y)
+  }
+
+  const fillCache = (pixelW, pixelH, nextView, { priorityRects = null } = {}) => {
+    const cache = cacheRef.current
+    if (!cache.canvas || !cache.ctx) return
+
+    const ctx = cache.ctx
+    ctx.imageSmoothingEnabled = false
+
+    renderIdRef.current += 1
+    const renderId = renderIdRef.current
+
+    // Queue rectangles to compute (cache pixels)
+    const allRects = priorityRects || [
+      { x: 0, y: 0, w: cache.width, h: cache.height },
+    ]
+
+    // Process in small slices to keep UI responsive
+    const CHUNK_ROWS = 32
+
+    const processNext = () => {
+      if (renderId !== renderIdRef.current) return
+
+      // Find a rect that still has rows left.
+      const rect = allRects.find((r) => r.h > 0)
+      if (!rect) return
+
+      const h = Math.min(CHUNK_ROWS, rect.h)
+      const slice = { x: rect.x, y: rect.y, w: rect.w, h }
+
+      computeRect(ctx, slice, pixelW, pixelH, nextView)
+
+      rect.y += h
+      rect.h -= h
+
+      requestAnimationFrame(processNext)
+    }
+
+    processNext()
+  }
+
+  const updateCacheForPan = (pixelW, pixelH, nextView) => {
+    const cache = cacheRef.current
+    if (!cache.canvas || !cache.ctx) return { usedCache: false }
+    if (cache.zoom !== nextView.zoom || cache.maxIter !== nextView.maxIter) return { usedCache: false }
+
+    const scale = scaleFor(nextView.zoom, pixelW, pixelH)
+
+    // Translate cache content by the pixel shift corresponding to center movement.
+    const dxFloat = (cache.centerX - nextView.centerX) / scale
+    const dyFloat = (cache.centerY - nextView.centerY) / scale
+
+    const dx = Math.round(dxFloat)
+    const dy = Math.round(dyFloat)
+
+    // If movement is too large, just reset (faster than shifting huge gaps)
+    if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
+      cache.centerX = nextView.centerX
+      cache.centerY = nextView.centerY
+      fillCache(pixelW, pixelH, nextView)
+      return { usedCache: true }
+    }
+
+    if (dx === 0 && dy === 0) {
+      // No meaningful pan in pixel space.
+      return { usedCache: true }
+    }
+
+    const ctx = cache.ctx
+    ctx.imageSmoothingEnabled = false
+
+    // Shift existing cache content
+    ctx.save()
+    ctx.globalCompositeOperation = 'copy'
+    ctx.drawImage(cache.canvas, dx, dy)
+    ctx.restore()
+
+    // Clear newly exposed regions and compute them.
+    // Exposed vertical strips
+    const rects = []
+
+    if (dx > 0) {
+      // moved content right; need new pixels on left
+      rects.push({ x: 0, y: 0, w: dx, h: cache.height })
+    } else if (dx < 0) {
+      // moved content left; need new pixels on right
+      rects.push({ x: cache.width + dx, y: 0, w: -dx, h: cache.height })
+    }
+
+    if (dy > 0) {
+      // moved content down; need new pixels at top
+      rects.push({ x: 0, y: 0, w: cache.width, h: dy })
+    } else if (dy < 0) {
+      // moved content up; need new pixels at bottom
+      rects.push({ x: 0, y: cache.height + dy, w: cache.width, h: -dy })
+    }
+
+    // Update cache center to the new view center.
+    cache.centerX = nextView.centerX
+    cache.centerY = nextView.centerY
+
+    // Clamp + compute exposed rects
+    const clamped = rects
+      .map((r) => ({
+        x: Math.max(0, Math.floor(r.x)),
+        y: Math.max(0, Math.floor(r.y)),
+        w: Math.max(0, Math.floor(r.w)),
+        h: Math.max(0, Math.floor(r.h)),
+      }))
+      .filter((r) => r.w > 0 && r.h > 0)
+
+    if (clamped.length) {
+      fillCache(pixelW, pixelH, nextView, { priorityRects: clamped })
+    }
+
+    return { usedCache: true }
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     if (!size.width || !size.height) return
 
     const dpr = size.dpr
-    const pixelWidth = Math.floor(size.width * dpr)
-    const pixelHeight = Math.floor(size.height * dpr)
+    const pixelW = Math.floor(size.width * dpr)
+    const pixelH = Math.floor(size.height * dpr)
 
-    canvas.width = pixelWidth
-    canvas.height = pixelHeight
+    canvas.width = pixelW
+    canvas.height = pixelH
 
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
+    ctx.imageSmoothingEnabled = false
 
-    renderIdRef.current += 1
-    const renderId = renderIdRef.current
+    // Ensure pan-cache exists and is compatible.
+    const { reset } = ensureCache(pixelW, pixelH, dpr, view)
 
-    const imageData = ctx.createImageData(pixelWidth, pixelHeight)
-    const data = imageData.data
-
-    const scale = 4 / (view.zoom * Math.min(pixelWidth, pixelHeight))
-    const halfW = pixelWidth / 2
-    const halfH = pixelHeight / 2
-    const maxIter = view.maxIter
-
-    let y = 0
-
-    const drawChunk = () => {
-      if (renderId !== renderIdRef.current) return
-      const rowsPerFrame = 24
-      const yEnd = Math.min(pixelHeight, y + rowsPerFrame)
-
-      for (; y < yEnd; y += 1) {
-        const cy = (y - halfH) * scale + view.centerY
-        for (let x = 0; x < pixelWidth; x += 1) {
-          const cx = (x - halfW) * scale + view.centerX
-          let zx = 0
-          let zy = 0
-          let iter = 0
-
-          while (zx * zx + zy * zy <= 4 && iter < maxIter) {
-            const xtemp = zx * zx - zy * zy + cx
-            zy = 2 * zx * zy + cy
-            zx = xtemp
-            iter += 1
-          }
-
-          const offset = (y * pixelWidth + x) * 4
-          if (iter >= maxIter) {
-            data[offset] = 5
-            data[offset + 1] = 10
-            data[offset + 2] = 16
-            data[offset + 3] = 255
-          } else {
-            const logZn = Math.log(zx * zx + zy * zy) / 2
-            const nu = Math.log(logZn / Math.LN2) / Math.LN2
-            const smooth = iter + 1 - nu
-            const t = smooth / maxIter
-            const hue = 210 + 140 * t
-            const sat = 0.75
-            const light = 0.3 + 0.5 * t
-            const [r, g, b] = hslToRgb(hue % 360, sat, light)
-            data[offset] = r
-            data[offset + 1] = g
-            data[offset + 2] = b
-            data[offset + 3] = 255
-          }
-        }
-      }
-
-      ctx.putImageData(imageData, 0, 0)
-
-      if (y < pixelHeight) {
-        requestAnimationFrame(drawChunk)
-      }
+    if (reset) {
+      // Fresh cache: compute entire cache (in chunks)
+      fillCache(pixelW, pixelH, view)
+    } else {
+      // Same zoom/iter: try to update cache by shifting + computing only new strips
+      updateCacheForPan(pixelW, pixelH, view)
     }
 
-    drawChunk()
+    // Draw viewport from cache
+    const cache = cacheRef.current
+    if (cache.canvas) {
+      const srcX = Math.floor((cache.width - pixelW) / 2)
+      const srcY = Math.floor((cache.height - pixelH) / 2)
+      ctx.clearRect(0, 0, pixelW, pixelH)
+      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
+    }
   }, [size, view])
 
   const screenToComplex = (rect, x, y, viewLike) => {
-    const scale = 4 / (viewLike.zoom * Math.min(rect.width, rect.height))
+    const pixelW = rect.width * (window.devicePixelRatio || 1)
+    const pixelH = rect.height * (window.devicePixelRatio || 1)
+    const scale = scaleFor(viewLike.zoom, pixelW, pixelH)
     return {
       x: (x - rect.width / 2) * scale + viewLike.centerX,
       y: (y - rect.height / 2) * scale + viewLike.centerY,
@@ -174,11 +363,20 @@ function App() {
   }
 
   const updateCenterFromScreen = (rect, x, y, zoomFactor) => {
-    const anchor = screenToComplex(rect, x, y, view)
+    // rect is CSS pixels
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = rect.width * dpr
+    const pixelH = rect.height * dpr
+
+    const scale = scaleFor(view.zoom, pixelW, pixelH)
+    const anchor = {
+      x: (x - rect.width / 2) * scale + view.centerX,
+      y: (y - rect.height / 2) * scale + view.centerY,
+    }
 
     setView((prev) => {
       const nextZoom = prev.zoom * zoomFactor
-      const nextScale = 4 / (nextZoom * Math.min(rect.width, rect.height))
+      const nextScale = scaleFor(nextZoom, pixelW, pixelH)
       return {
         ...prev,
         zoom: nextZoom,
@@ -232,12 +430,11 @@ function App() {
     g.pointers.set(event.pointerId, { x, y })
 
     if (g.pointers.size === 2) {
-      const [p1, p2] = Array.from(g.pointers.values())
-      beginPinch(rect, p1, p2)
+      const [pp1, pp2] = Array.from(g.pointers.values())
+      beginPinch(rect, pp1, pp2)
       return
     }
 
-    // start pan with single pointer
     g.mode = 'pan'
     dragRef.current = {
       active: true,
@@ -272,16 +469,19 @@ function App() {
 
       const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
 
-      // Detect whether this was a real pinch (not a quick 2-finger tap)
       const distDelta = Math.abs(dist - (g.startDist || 0))
       const midDelta = Math.hypot(mid.x - g.startMid.x, mid.y - g.startMid.y)
       if (distDelta > 8 || midDelta > 8) g.pinchMoved = true
 
       const ratio = dist / (g.startDist || 1)
       const nextZoom = Math.max(0.05, g.startView.zoom * ratio)
-      const nextScale = 4 / (nextZoom * Math.min(rect.width, rect.height))
 
-      // Keep the complex coordinate under the pinch midpoint stable.
+      // Reset cache on zoom changes automatically (handled by ensureCache).
+      const dpr = window.devicePixelRatio || 1
+      const pixelW = rect.width * dpr
+      const pixelH = rect.height * dpr
+      const nextScale = scaleFor(nextZoom, pixelW, pixelH)
+
       const anchor = g.anchorComplex
       const nextCenterX = anchor.x - (mid.x - rect.width / 2) * nextScale
       const nextCenterY = anchor.y - (mid.y - rect.height / 2) * nextScale
@@ -305,7 +505,10 @@ function App() {
     }
     if (!drag.moved) return
 
-    const scale = 4 / (drag.startZoom * Math.min(rect.width, rect.height))
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = rect.width * dpr
+    const pixelH = rect.height * dpr
+    const scale = scaleFor(drag.startZoom, pixelW, pixelH)
 
     setView((prev) => ({
       ...prev,
@@ -378,7 +581,6 @@ function App() {
     setIsDragging(g.pointers.size > 0)
 
     if (!didDrag) {
-      // Mouse: shift-click zooms out; Touch: tap zooms in (use buttons or two-finger tap for zoom out).
       const zoomFactor = event.pointerType === 'mouse' && event.shiftKey ? 1 / 1.8 : 1.8
       updateCenterFromPointer(event, zoomFactor)
     }
@@ -393,14 +595,18 @@ function App() {
   const zoomOut = () => setView((prev) => ({ ...prev, zoom: prev.zoom / 1.6 }))
   const reset = () => setView(DEFAULT_VIEW)
 
+  const tipText = useMemo(() => {
+    return 'Pinch to zoom. Two-finger tap to zoom out. Drag to move.'
+  }, [])
+
   return (
     <div className="page">
       <header className="hero">
         <div>
           <p className="eyebrow">Mandelbrot Explorer</p>
           <p className="lede">
-            Tap to zoom in, drag to pan, and pinch to zoom on mobile. Two-finger tap zooms out.
-            On desktop: click to zoom, Shift/right-click to zoom out.
+            Tap to zoom in, drag to pan, and pinch to zoom on mobile. Two-finger tap zooms out. On
+            desktop: click to zoom, Shift/right-click to zoom out.
           </p>
         </div>
         <div className="controls">
@@ -462,7 +668,7 @@ function App() {
           </div>
           <div>
             <span>Tip</span>
-            <strong>Pinch to zoom. Two-finger tap to zoom out. Drag to move.</strong>
+            <strong>{tipText}</strong>
           </div>
         </div>
       </section>
