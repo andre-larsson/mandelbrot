@@ -199,7 +199,12 @@ function App() {
     targetCtx.putImageData(img, rect.x, rect.y)
   }
 
-  const fillCache = (pixelW, pixelH, nextView, { priorityRects = null } = {}) => {
+  const fillCache = (
+    pixelW,
+    pixelH,
+    nextView,
+    { priorityRects = null, onProgress = null } = {},
+  ) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return
 
@@ -229,6 +234,9 @@ function App() {
 
       computeRect(ctx, slice, pixelW, pixelH, nextView)
 
+      // Let the visible canvas update progressively while we render in chunks.
+      if (typeof onProgress === 'function') onProgress()
+
       rect.y += h
       rect.h -= h
 
@@ -238,7 +246,7 @@ function App() {
     processNext()
   }
 
-  const updateCacheForPan = (pixelW, pixelH, nextView) => {
+  const updateCacheForPan = (pixelW, pixelH, nextView, { onProgress = null } = {}) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return { usedCache: false }
     if (cache.zoom !== nextView.zoom || cache.maxIter !== nextView.maxIter) return { usedCache: false }
@@ -256,7 +264,7 @@ function App() {
     if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
       cache.centerX = nextView.centerX
       cache.centerY = nextView.centerY
-      fillCache(pixelW, pixelH, nextView)
+      fillCache(pixelW, pixelH, nextView, { onProgress })
       return { usedCache: true }
     }
 
@@ -309,7 +317,10 @@ function App() {
       .filter((r) => r.w > 0 && r.h > 0)
 
     if (clamped.length) {
-      fillCache(pixelW, pixelH, nextView, { priorityRects: clamped })
+      fillCache(pixelW, pixelH, nextView, {
+        priorityRects: clamped,
+        onProgress,
+      })
     }
 
     return { usedCache: true }
@@ -319,6 +330,20 @@ function App() {
     const canvas = canvasRef.current
     if (!canvas) return
     if (!size.width || !size.height) return
+
+    const drawViewportFromCache = (pixelW, pixelH) => {
+      const ctx = canvas.getContext('2d', { alpha: false })
+      if (!ctx) return
+      ctx.imageSmoothingEnabled = false
+
+      const cache = cacheRef.current
+      if (!cache.canvas) return
+
+      const srcX = Math.floor((cache.width - pixelW) / 2)
+      const srcY = Math.floor((cache.height - pixelH) / 2)
+      ctx.clearRect(0, 0, pixelW, pixelH)
+      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
+    }
 
     const dpr = size.dpr
     const pixelW = Math.floor(size.width * dpr)
@@ -336,10 +361,14 @@ function App() {
 
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
-      fillCache(pixelW, pixelH, view)
+      fillCache(pixelW, pixelH, view, {
+        onProgress: () => drawViewportFromCache(pixelW, pixelH),
+      })
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(pixelW, pixelH, view)
+      updateCacheForPan(pixelW, pixelH, view, {
+        onProgress: () => drawViewportFromCache(pixelW, pixelH),
+      })
     }
 
     // Draw viewport from cache
