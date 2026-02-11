@@ -22,11 +22,6 @@
   margin: 0 0 12px;
 }
 
-.hero h1 {
-  font-size: clamp(2.4rem, 3vw, 3.3rem);
-  margin: 0 0 12px;
-}
-
 .lede {
   max-width: 560px;
   color: #c7d8f5;
@@ -38,6 +33,12 @@
   display: grid;
   gap: 12px;
   justify-items: start;
+}
+
+.controls-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -95,7 +96,12 @@ canvas {
   height: min(70vh, 640px);
   display: block;
   border-radius: 12px;
-  cursor: zoom-in;
+  cursor: grab;
+  touch-action: none;
+}
+
+canvas.dragging {
+  cursor: grabbing;
 }
 
 .meta {

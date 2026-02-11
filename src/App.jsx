@@ -34,8 +34,19 @@ function hslToRgb(h, s, l) {
 function App() {
   const canvasRef = useRef(null)
   const renderIdRef = useRef(0)
+  const dragRef = useRef({
+    active: false,
+    pointerId: null,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    startCenterX: 0,
+    startCenterY: 0,
+    startZoom: DEFAULT_VIEW.zoom,
+  })
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
+  const [isDragging, setIsDragging] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -139,25 +150,97 @@ function App() {
     drawChunk()
   }, [size, view])
 
-  const handleCanvasClick = (event) => {
+  const updateCenterFromPointer = (event, zoomFactor) => {
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
-    const dpr = size.dpr || 1
-    const pixelWidth = rect.width * dpr
-    const pixelHeight = rect.height * dpr
-    const scale = 4 / (view.zoom * Math.min(pixelWidth, pixelHeight))
-    const cx = (x * dpr - pixelWidth / 2) * scale + view.centerX
-    const cy = (y * dpr - pixelHeight / 2) * scale + view.centerY
+    const scale = 4 / (view.zoom * Math.min(rect.width, rect.height))
+    const cx = (x - rect.width / 2) * scale + view.centerX
+    const cy = (y - rect.height / 2) * scale + view.centerY
 
     setView((prev) => ({
       ...prev,
       centerX: cx,
       centerY: cy,
-      zoom: prev.zoom * 1.8,
+      zoom: prev.zoom * zoomFactor,
     }))
+  }
+
+  const handlePointerDown = (event) => {
+    if (event.button !== 0) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    canvas.setPointerCapture(event.pointerId)
+    dragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      moved: false,
+      startX: event.clientX,
+      startY: event.clientY,
+      startCenterX: view.centerX,
+      startCenterY: view.centerY,
+      startZoom: view.zoom,
+    }
+    setIsDragging(true)
+  }
+
+  const handlePointerMove = (event) => {
+    const drag = dragRef.current
+    if (!drag.active || drag.pointerId !== event.pointerId) return
+
+    const dx = event.clientX - drag.startX
+    const dy = event.clientY - drag.startY
+    if (!drag.moved && Math.hypot(dx, dy) > 3) {
+      drag.moved = true
+    }
+    if (!drag.moved) return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const scale = 4 / (drag.startZoom * Math.min(rect.width, rect.height))
+
+    setView((prev) => ({
+      ...prev,
+      centerX: drag.startCenterX - dx * scale,
+      centerY: drag.startCenterY - dy * scale,
+    }))
+  }
+
+  const finishPointer = (event) => {
+    const drag = dragRef.current
+    if (!drag.active || drag.pointerId !== event.pointerId) return
+
+    const canvas = canvasRef.current
+    if (canvas?.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId)
+    }
+
+    const didDrag = drag.moved
+    dragRef.current = {
+      active: false,
+      pointerId: null,
+      moved: false,
+      startX: 0,
+      startY: 0,
+      startCenterX: 0,
+      startCenterY: 0,
+      startZoom: view.zoom,
+    }
+    setIsDragging(false)
+
+    if (!didDrag) {
+      const zoomFactor = event.shiftKey ? 1 / 1.8 : 1.8
+      updateCenterFromPointer(event, zoomFactor)
+    }
+  }
+
+  const handleCanvasContextMenu = (event) => {
+    event.preventDefault()
+    updateCenterFromPointer(event, 1 / 1.8)
   }
 
   const zoomIn = () => setView((prev) => ({ ...prev, zoom: prev.zoom * 1.6 }))
@@ -169,22 +252,24 @@ function App() {
       <header className="hero">
         <div>
           <p className="eyebrow">Mandelbrot Explorer</p>
-          <h1>Infinite complexity, painted in math.</h1>
           <p className="lede">
-            Click the canvas to zoom into the set. Use the controls to explore
-            detail, adjust iterations, or reset back to the classic view.
+            Click to zoom in, Shift-click or right-click to zoom out, and drag
+            to pan. Use the controls to adjust iterations or reset back to the
+            classic view.
           </p>
         </div>
         <div className="controls">
-          <button className="btn" onClick={zoomIn}>
-            Zoom In
-          </button>
-          <button className="btn" onClick={zoomOut}>
-            Zoom Out
-          </button>
-          <button className="btn ghost" onClick={reset}>
-            Reset
-          </button>
+          <div className="controls-row">
+            <button className="btn" onClick={zoomIn}>
+              Zoom In
+            </button>
+            <button className="btn" onClick={zoomOut}>
+              Zoom Out
+            </button>
+            <button className="btn ghost" onClick={reset}>
+              Reset
+            </button>
+          </div>
           <label className="slider">
             <span>Iterations</span>
             <input
@@ -209,7 +294,12 @@ function App() {
         <div className="canvas-frame">
           <canvas
             ref={canvasRef}
-            onClick={handleCanvasClick}
+            className={isDragging ? 'dragging' : ''}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={finishPointer}
+            onPointerCancel={finishPointer}
+            onContextMenu={handleCanvasContextMenu}
             role="img"
             aria-label="Mandelbrot set"
           />
@@ -218,7 +308,7 @@ function App() {
           <div>
             <span>Center</span>
             <strong>
-              {view.centerX.toFixed(6)}, {view.centerY.toFixed(6)}
+              {view.centerX.toFixed(2)}, {view.centerY.toFixed(2)}
             </strong>
           </div>
           <div>
@@ -227,7 +317,7 @@ function App() {
           </div>
           <div>
             <span>Tip</span>
-            <strong>Click to zoom. Reset to go back.</strong>
+            <strong>Drag to move. Shift/right-click to zoom out.</strong>
           </div>
         </div>
       </section>
