@@ -41,8 +41,6 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    outputs:
-      page_url: ${{ steps.deployment.outputs.page_url }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -50,26 +48,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  verify:
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for Pages propagation
-        run: sleep 30
-
-      - name: Verify live page
-        env:
-          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
-        run: |
-          echo "Checking $PAGE_URL"
-          for attempt in 1 2 3 4 5; do
-            if curl -fsS -I "$PAGE_URL" >/dev/null; then
-              echo "Page is live."
-              exit 0
-            fi
-            echo "Not live yet (attempt $attempt). Waiting..."
-            sleep 15
-          done
-          echo "Page did not become reachable in time."
-          exit 1
