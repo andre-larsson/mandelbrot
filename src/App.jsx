@@ -44,6 +44,7 @@ const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 const ZOOM_QUANT_STEP = 1.015 // ~1.5% zoom buckets
 const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
+const PAN_SWIPE_MULTIPLIER = 1.7
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -885,8 +886,8 @@ function App() {
     const drag = dragRef.current
     if (!drag.active || drag.pointerId !== event.pointerId) return
 
-    const dx = event.clientX - drag.startX
-    const dy = event.clientY - drag.startY
+    const dx = (event.clientX - drag.startX) * PAN_SWIPE_MULTIPLIER
+    const dy = (event.clientY - drag.startY) * PAN_SWIPE_MULTIPLIER
     if (!drag.moved && Math.hypot(dx, dy) > 3) {
       drag.moved = true
     }
