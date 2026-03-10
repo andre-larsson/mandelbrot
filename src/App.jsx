@@ -42,7 +42,7 @@ const COLOR_SCHEMES = {
 
 const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 const ZOOM_QUANT_STEP = 1.015 // ~1.5% zoom buckets
-const ZOOM_STEP_BUCKETS = 32
+const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 
 function hslToRgb(h, s, l) {
