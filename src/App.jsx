@@ -161,6 +161,7 @@ function App() {
     colorScheme: null,
     juliaC: null,
     smoothBuffer: null,
+    geometryDirty: false,
     // complex coordinate at the cache canvas center
     centerX: 0,
     centerY: 0,
@@ -260,6 +261,7 @@ function App() {
     nextFractalType,
     nextColorScheme,
     nextJuliaC,
+    allowDirtyReset,
   ) => {
     const cache = cacheRef.current
 
@@ -276,7 +278,8 @@ function App() {
       cache.fractalType !== nextFractalType ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
-      cache.juliaC.im !== nextJuliaC.im
+      cache.juliaC.im !== nextJuliaC.im ||
+      (cache.geometryDirty && allowDirtyReset)
 
     if (needsGeometryReset) {
       const off = document.createElement('canvas')
@@ -296,6 +299,7 @@ function App() {
         colorScheme: nextColorScheme,
         juliaC: { ...nextJuliaC },
         smoothBuffer: new Float32Array(cacheW * cacheH),
+        geometryDirty: false,
         centerX: nextView.centerX,
         centerY: nextView.centerY,
       }
@@ -520,7 +524,7 @@ function App() {
     ctx.drawImage(cache.canvas, dx, dy)
     ctx.restore()
 
-    if (cache.smoothBuffer) {
+    if (cache.smoothBuffer && !dragRef.current.active) {
       const w = cache.width
       const h = cache.height
       const shifted = new Float32Array(w * h)
@@ -582,10 +586,15 @@ function App() {
       .filter((r) => r.w > 0 && r.h > 0)
 
     if (clamped.length) {
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
-        priorityRects: clamped,
-        onDone,
-      })
+      if (dragRef.current.active) {
+        cache.geometryDirty = true
+        if (typeof onDone === 'function') onDone()
+      } else {
+        fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
+          priorityRects: clamped,
+          onDone,
+        })
+      }
     } else if (typeof onDone === 'function') {
       onDone()
     }
@@ -636,6 +645,7 @@ function App() {
       fractalType,
       colorScheme,
       juliaC,
+      !dragRef.current.active,
     )
 
     if (reset) {
