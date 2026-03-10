@@ -235,6 +235,13 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    // Force a true recompute when user changes internal resolution.
+    const cache = cacheRef.current
+    cache.geometryDirty = true
+    cache.hasCompleteFrame = false
+  }, [internalScale])
+
   const noteInteraction = (mode = 'pan') => {
     setInteractionMode(mode)
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
