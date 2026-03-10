@@ -435,8 +435,8 @@ function App() {
       { x: 0, y: 0, w: cache.width, h: cache.height },
     ]
 
-    // Process in small slices to keep UI responsive
-    const CHUNK_ROWS = 32
+    // Process in slices; use larger chunks for low-iteration preview passes.
+    const CHUNK_ROWS = nextView.maxIter <= 260 ? 128 : 32
 
     const processNext = () => {
       if (renderId !== renderIdRef.current) return
@@ -559,6 +559,41 @@ function App() {
     // Clear newly exposed regions and compute them.
     // Exposed vertical strips
     const rects = []
+
+    // For active drag, avoid visible black gaps by stretching edge pixels into exposed areas.
+    if (dragRef.current.active) {
+      if (dx > 0) {
+        ctx.drawImage(cache.canvas, dx, 0, 1, cache.height, 0, 0, dx, cache.height)
+      } else if (dx < 0) {
+        ctx.drawImage(
+          cache.canvas,
+          cache.width + dx - 1,
+          0,
+          1,
+          cache.height,
+          cache.width + dx,
+          0,
+          -dx,
+          cache.height,
+        )
+      }
+
+      if (dy > 0) {
+        ctx.drawImage(cache.canvas, 0, dy, cache.width, 1, 0, 0, cache.width, dy)
+      } else if (dy < 0) {
+        ctx.drawImage(
+          cache.canvas,
+          0,
+          cache.height + dy - 1,
+          cache.width,
+          1,
+          0,
+          cache.height + dy,
+          cache.width,
+          -dy,
+        )
+      }
+    }
 
     if (dx > 0) {
       // moved content right; need new pixels on left
