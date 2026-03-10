@@ -612,7 +612,7 @@ function App() {
     const drawViewportFromCache = (renderW, renderH, fullW, fullH) => {
       const ctx = canvas.getContext('2d', { alpha: false })
       if (!ctx) return
-      ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
+      ctx.imageSmoothingEnabled = internalScale >= 0.99 ? false : true
 
       const cache = cacheRef.current
       if (!cache.canvas) return
@@ -629,15 +629,15 @@ function App() {
     const dpr = size.dpr
     const fullPixelW = Math.floor(size.width * dpr)
     const fullPixelH = Math.floor(size.height * dpr)
-    const renderW = Math.max(1, Math.floor(fullPixelW * renderScale))
-    const renderH = Math.max(1, Math.floor(fullPixelH * renderScale))
+    const renderW = Math.max(1, Math.floor(fullPixelW * internalScale))
+    const renderH = Math.max(1, Math.floor(fullPixelH * internalScale))
 
     if (canvas.width !== fullPixelW) canvas.width = fullPixelW
     if (canvas.height !== fullPixelH) canvas.height = fullPixelH
 
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
-    ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
+    ctx.imageSmoothingEnabled = internalScale >= 0.99 ? false : true
 
     const renderView = { ...view, maxIter: renderMaxIter }
 
@@ -645,7 +645,7 @@ function App() {
     const { reset, recolorOnly } = ensureCache(
       renderW,
       renderH,
-      dpr * renderScale,
+      dpr * internalScale,
       renderView,
       fractalType,
       colorScheme,
@@ -669,7 +669,7 @@ function App() {
       })
     }
 
-  }, [size, view, fractalType, colorScheme, juliaC, renderScale, renderMaxIter])
+  }, [size, view, fractalType, colorScheme, juliaC, internalScale, renderScale, renderMaxIter])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
