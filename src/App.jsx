@@ -41,6 +41,7 @@ const COLOR_SCHEMES = {
 }
 
 const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
+const ZOOM_QUANT_STEP = 1.015 // ~1.5% zoom buckets
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -97,6 +98,12 @@ function colorForT(t, scheme) {
   const sat = 0.75
   const light = 0.3 + 0.5 * t
   return hslToRgb(hue % 360, sat, light)
+}
+
+function quantizeZoom(zoom) {
+  const safe = Math.max(0.000001, zoom)
+  const k = Math.round(Math.log(safe) / Math.log(ZOOM_QUANT_STEP))
+  return Math.pow(ZOOM_QUANT_STEP, k)
 }
 
 function iterateEscape(cx, cy, maxIter, fractalType, juliaC) {
@@ -600,7 +607,7 @@ function App() {
     }
 
     setView((prev) => {
-      const nextZoom = prev.zoom * zoomFactor
+      const nextZoom = quantizeZoom(prev.zoom * zoomFactor)
       const nextScale = scaleFor(nextZoom, pixelW, pixelH)
       return {
         ...prev,
@@ -702,7 +709,7 @@ function App() {
       if (distDelta > 8 || midDelta > 8) g.pinchMoved = true
 
       const ratio = dist / (g.startDist || 1)
-      const nextZoom = Math.max(0.05, g.startView.zoom * ratio)
+      const nextZoom = quantizeZoom(Math.max(0.05, g.startView.zoom * ratio))
 
       // Reset cache on zoom changes automatically (handled by ensureCache).
       const dpr = window.devicePixelRatio || 1
@@ -841,11 +848,16 @@ function App() {
     updateCenterFromPointer(event, zoomFactor)
   }
 
-  const zoomIn = () => setView((prev) => ({ ...prev, zoom: prev.zoom * 1.6 }))
-  const zoomOut = () => setView((prev) => ({ ...prev, zoom: prev.zoom / 1.6 }))
+  const zoomIn = () => setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * 1.6) }))
+  const zoomOut = () => setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / 1.6) }))
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    setView((prev) => ({ ...prev, ...base, maxIter: DEFAULT_VIEW.maxIter }))
+    setView((prev) => ({
+      ...prev,
+      ...base,
+      zoom: quantizeZoom(base.zoom),
+      maxIter: DEFAULT_VIEW.maxIter,
+    }))
   }
 
   const tipText = useMemo(() => {
@@ -855,7 +867,7 @@ function App() {
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
     const base = FRACTALS[nextType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    setView((prev) => ({ ...prev, ...base }))
+    setView((prev) => ({ ...prev, ...base, zoom: quantizeZoom(base.zoom) }))
   }
 
   return (
