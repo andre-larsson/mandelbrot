@@ -708,9 +708,24 @@ function App() {
       drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH)
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
-        onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
-      })
+      const { usedCache } = updateCacheForPan(
+        renderW,
+        renderH,
+        renderView,
+        fractalType,
+        colorScheme,
+        juliaC,
+        {
+          onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
+        },
+      )
+
+      // If cache can't be reused (e.g. preview/full iter switch), do a fresh render.
+      if (!usedCache) {
+        fillCache(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
+          onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
+        })
+      }
     }
 
   }, [size, view, fractalType, colorScheme, juliaC, internalScale, renderScale, renderMaxIter])
