@@ -233,13 +233,13 @@ function App() {
   const noteInteraction = (mode = 'pan') => {
     setInteractionMode(mode)
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
-    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 180)
+    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 420)
   }
 
   const renderScale = useMemo(() => {
     if (!adaptiveQuality) return internalScale
     if (interactionMode !== 'zoom') return internalScale
-    return Math.max(0.35, internalScale * 0.6)
+    return Math.max(0.25, internalScale * 0.5)
   }, [adaptiveQuality, internalScale, interactionMode])
 
   const scaleFor = (zoom, pixelW, pixelH) => {
@@ -1036,7 +1036,10 @@ function App() {
           </div>
           <div>
             <span>Render</span>
-            <strong>{Math.round(renderScale * 100)}%</strong>
+            <strong>
+              {Math.round(renderScale * 100)}%
+              {adaptiveQuality && interactionMode === 'zoom' ? ' (preview)' : ''}
+            </strong>
           </div>
           <div>
             <span>Tip</span>
