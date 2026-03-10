@@ -782,6 +782,7 @@ function App() {
 
     // Two-finger tap to zoom out.
     if (wasPinch && wasTwoFingers && !pinchMoved && pinchDurationMs < 280 && rect) {
+      noteInteraction('zoom')
       const p1 = pointersBefore[0]
       const p2 = pointersBefore[1]
       const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
@@ -819,6 +820,7 @@ function App() {
     setIsDragging(g.pointers.size > 0)
 
     if (!didDrag) {
+      noteInteraction('zoom')
       const zoomFactor =
         event.pointerType === 'mouse' && event.shiftKey ? 1 / ZOOM_STEP_FACTOR : ZOOM_STEP_FACTOR
       updateCenterFromPointer(event, zoomFactor)
