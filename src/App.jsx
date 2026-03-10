@@ -249,7 +249,7 @@ function App() {
 
   const renderMaxIter = useMemo(() => {
     if (!adaptiveQuality || interactionMode !== 'zoom') return view.maxIter
-    return Math.max(80, Math.floor(view.maxIter * 0.35))
+    return Math.max(10, Math.floor(view.maxIter * 0.1))
   }, [adaptiveQuality, interactionMode, view.maxIter])
 
   const scaleFor = (zoom, pixelW, pixelH) => {
