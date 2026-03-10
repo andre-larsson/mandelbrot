@@ -162,6 +162,7 @@ function App() {
     juliaC: null,
     smoothBuffer: null,
     geometryDirty: false,
+    hasCompleteFrame: false,
     // complex coordinate at the cache canvas center
     centerX: 0,
     centerY: 0,
@@ -302,6 +303,7 @@ function App() {
         juliaC: { ...nextJuliaC },
         smoothBuffer: new Float32Array(cacheW * cacheH),
         geometryDirty: false,
+        hasCompleteFrame: false,
         centerX: nextView.centerX,
         centerY: nextView.centerY,
       }
@@ -438,12 +440,15 @@ function App() {
     // Process in slices; use larger chunks for low-iteration preview passes.
     const CHUNK_ROWS = nextView.maxIter <= 260 ? 128 : 32
 
+    cache.hasCompleteFrame = false
+
     const processNext = () => {
       if (renderId !== renderIdRef.current) return
 
       // Find a rect that still has rows left.
       const rect = allRects.find((r) => r.h > 0)
       if (!rect) {
+        cache.hasCompleteFrame = true
         if (typeof onDone === 'function') onDone()
         return
       }
@@ -491,7 +496,8 @@ function App() {
       cache.fractalType !== nextFractalType ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
-      cache.juliaC.im !== nextJuliaC.im
+      cache.juliaC.im !== nextJuliaC.im ||
+      !cache.hasCompleteFrame
     ) {
       return { usedCache: false }
     }
