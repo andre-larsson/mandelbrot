@@ -233,7 +233,7 @@ function App() {
   const noteInteraction = (mode = 'pan') => {
     setInteractionMode(mode)
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
-    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 420)
+    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 1200)
   }
 
   const renderScale = useMemo(() => {
@@ -873,6 +873,8 @@ function App() {
     return 'Pinch to zoom. Two-finger tap to zoom out. Drag to move.'
   }, [])
 
+  const previewActive = adaptiveQuality && interactionMode === 'zoom' && renderScale < internalScale
+
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
     const base = FRACTALS[nextType]?.defaultView || FRACTALS.mandelbrot.defaultView
@@ -1037,10 +1039,11 @@ function App() {
           </div>
           <div>
             <span>Render</span>
-            <strong>
-              {Math.round(renderScale * 100)}%
-              {adaptiveQuality && interactionMode === 'zoom' ? ' (preview)' : ''}
-            </strong>
+            <strong>{Math.round(renderScale * 100)}%</strong>
+          </div>
+          <div>
+            <span>Quality</span>
+            <strong>{previewActive ? 'Preview' : 'Full'}</strong>
           </div>
           <div>
             <span>Tip</span>
