@@ -42,6 +42,8 @@ const COLOR_SCHEMES = {
 
 const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 const ZOOM_QUANT_STEP = 1.015 // ~1.5% zoom buckets
+const ZOOM_STEP_BUCKETS = 32
+const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -783,7 +785,7 @@ function App() {
       const p1 = pointersBefore[0]
       const p2 = pointersBefore[1]
       const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
-      updateCenterFromScreen(rect, mid.x, mid.y, 1 / 1.8)
+      updateCenterFromScreen(rect, mid.x, mid.y, 1 / ZOOM_STEP_FACTOR)
     }
 
     // If we were pinching and one finger lifted, end pinch.
@@ -817,7 +819,8 @@ function App() {
     setIsDragging(g.pointers.size > 0)
 
     if (!didDrag) {
-      const zoomFactor = event.pointerType === 'mouse' && event.shiftKey ? 1 / 1.8 : 1.8
+      const zoomFactor =
+        event.pointerType === 'mouse' && event.shiftKey ? 1 / ZOOM_STEP_FACTOR : ZOOM_STEP_FACTOR
       updateCenterFromPointer(event, zoomFactor)
     }
   }
@@ -825,7 +828,7 @@ function App() {
   const handleCanvasContextMenu = (event) => {
     noteInteraction('zoom')
     event.preventDefault()
-    updateCenterFromPointer(event, 1 / 1.8)
+    updateCenterFromPointer(event, 1 / ZOOM_STEP_FACTOR)
   }
 
   const handleWheel = (event) => {
@@ -848,8 +851,10 @@ function App() {
     updateCenterFromPointer(event, zoomFactor)
   }
 
-  const zoomIn = () => setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * 1.6) }))
-  const zoomOut = () => setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / 1.6) }))
+  const zoomIn = () =>
+    setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * ZOOM_STEP_FACTOR) }))
+  const zoomOut = () =>
+    setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / ZOOM_STEP_FACTOR) }))
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
     setView((prev) => ({
