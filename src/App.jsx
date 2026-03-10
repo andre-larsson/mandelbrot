@@ -245,17 +245,18 @@ function App() {
   const noteInteraction = (mode = 'pan') => {
     setInteractionMode(mode)
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
-    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 1200)
+    // If no interaction for ~1s, switch back to accurate render mode.
+    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 1000)
   }
 
   const renderScale = useMemo(() => {
     if (!adaptiveQuality) return internalScale
-    if (interactionMode !== 'zoom') return internalScale
+    if (interactionMode === 'idle') return internalScale
     return Math.max(0.25, internalScale * 0.5)
   }, [adaptiveQuality, internalScale, interactionMode])
 
   const renderMaxIter = useMemo(() => {
-    if (!adaptiveQuality || interactionMode !== 'zoom') return view.maxIter
+    if (!adaptiveQuality || interactionMode === 'idle') return view.maxIter
     return Math.max(10, Math.floor(view.maxIter * 0.1))
   }, [adaptiveQuality, interactionMode, view.maxIter])
 
