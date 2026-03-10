@@ -188,7 +188,7 @@ function App() {
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
-  const [isInteracting, setIsInteracting] = useState(false)
+  const [interactionMode, setInteractionMode] = useState('idle')
 
   const interactionTimerRef = useRef(null)
 
@@ -221,16 +221,17 @@ function App() {
     }
   }, [])
 
-  const noteInteraction = () => {
-    setIsInteracting(true)
+  const noteInteraction = (mode = 'pan') => {
+    setInteractionMode(mode)
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
-    interactionTimerRef.current = setTimeout(() => setIsInteracting(false), 140)
+    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 180)
   }
 
   const renderScale = useMemo(() => {
-    if (!adaptiveQuality || !isInteracting) return internalScale
+    if (!adaptiveQuality) return internalScale
+    if (interactionMode !== 'zoom') return internalScale
     return Math.max(0.35, internalScale * 0.6)
-  }, [adaptiveQuality, internalScale, isInteracting])
+  }, [adaptiveQuality, internalScale, interactionMode])
 
   const scaleFor = (zoom, pixelW, pixelH) => {
     return 4 / (zoom * Math.min(pixelW, pixelH))
@@ -639,7 +640,7 @@ function App() {
   }
 
   const handlePointerDown = (event) => {
-    noteInteraction()
+    noteInteraction('pan')
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -675,7 +676,7 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
-    noteInteraction()
+    noteInteraction('pan')
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -688,6 +689,7 @@ function App() {
     }
 
     if (g.mode === 'pinch' && g.pointers.size >= 2) {
+      noteInteraction('zoom')
       const [p1, p2] = Array.from(g.pointers.values())
       const dx = p2.x - p1.x
       const dy = p2.y - p1.y
@@ -744,7 +746,7 @@ function App() {
   }
 
   const finishPointer = (event) => {
-    noteInteraction()
+    noteInteraction('pan')
     const canvas = canvasRef.current
     const g = gestureRef.current
 
@@ -814,13 +816,13 @@ function App() {
   }
 
   const handleCanvasContextMenu = (event) => {
-    noteInteraction()
+    noteInteraction('zoom')
     event.preventDefault()
     updateCenterFromPointer(event, 1 / 1.8)
   }
 
   const handleWheel = (event) => {
-    noteInteraction()
+    noteInteraction('zoom')
     // Zoom towards cursor position (desktop mouse wheel / trackpad).
     // Prevent page scroll while interacting with the canvas.
     event.preventDefault()
