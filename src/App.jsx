@@ -851,10 +851,14 @@ function App() {
     updateCenterFromPointer(event, zoomFactor)
   }
 
-  const zoomIn = () =>
+  const zoomIn = () => {
+    noteInteraction('zoom')
     setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * ZOOM_STEP_FACTOR) }))
-  const zoomOut = () =>
+  }
+  const zoomOut = () => {
+    noteInteraction('zoom')
     setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / ZOOM_STEP_FACTOR) }))
+  }
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
     setView((prev) => ({
