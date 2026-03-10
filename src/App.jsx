@@ -160,6 +160,7 @@ function App() {
     fractalType: null,
     colorScheme: null,
     juliaC: null,
+    smoothBuffer: null,
     // complex coordinate at the cache canvas center
     centerX: 0,
     centerY: 0,
@@ -263,17 +264,16 @@ function App() {
     const needsNewCanvas =
       !cache.canvas || cache.width !== cacheW || cache.height !== cacheH || cache.dpr !== dpr
 
-    const needsReset =
+    const needsGeometryReset =
       needsNewCanvas ||
       cache.zoom !== nextView.zoom ||
       cache.maxIter !== nextView.maxIter ||
       cache.fractalType !== nextFractalType ||
-      cache.colorScheme !== nextColorScheme ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
       cache.juliaC.im !== nextJuliaC.im
 
-    if (needsReset) {
+    if (needsGeometryReset) {
       const off = document.createElement('canvas')
       off.width = cacheW
       off.height = cacheH
@@ -290,14 +290,60 @@ function App() {
         fractalType: nextFractalType,
         colorScheme: nextColorScheme,
         juliaC: { ...nextJuliaC },
+        smoothBuffer: new Float32Array(cacheW * cacheH),
         centerX: nextView.centerX,
         centerY: nextView.centerY,
       }
 
-      return { reset: true }
+      return { reset: true, recolorOnly: false }
     }
 
-    return { reset: false }
+    const recolorOnly = cache.colorScheme !== nextColorScheme
+    if (recolorOnly) {
+      cache.colorScheme = nextColorScheme
+    }
+
+    return { reset: false, recolorOnly }
+  }
+
+  const paintRectFromSmooth = (targetCtx, rect, nextColorScheme, maxIter) => {
+    const cache = cacheRef.current
+    if (!cache.smoothBuffer) return
+
+    const img = targetCtx.createImageData(rect.w, rect.h)
+    const data = img.data
+
+    for (let j = 0; j < rect.h; j += 1) {
+      const py = rect.y + j
+      for (let i = 0; i < rect.w; i += 1) {
+        const px = rect.x + i
+        const sourceIndex = py * cache.width + px
+        const offset = (j * rect.w + i) * 4
+        const smooth = cache.smoothBuffer[sourceIndex]
+
+        if (smooth < 0) {
+          data[offset] = 5
+          data[offset + 1] = 10
+          data[offset + 2] = 16
+          data[offset + 3] = 255
+        } else {
+          const t = smooth / maxIter
+          const [r, g, b] = colorForT(t, nextColorScheme)
+          data[offset] = r
+          data[offset + 1] = g
+          data[offset + 2] = b
+          data[offset + 3] = 255
+        }
+      }
+    }
+
+    targetCtx.putImageData(img, rect.x, rect.y)
+  }
+
+  const repaintEntireCache = (nextColorScheme, maxIter) => {
+    const cache = cacheRef.current
+    if (!cache.ctx) return
+    paintRectFromSmooth(cache.ctx, { x: 0, y: 0, w: cache.width, h: cache.height }, nextColorScheme, maxIter)
   }
 
   const computeRect = (
@@ -313,9 +359,6 @@ function App() {
     // rect is in cache-canvas pixel coordinates.
     const cache = cacheRef.current
     const { width: cacheW, height: cacheH } = cache
-
-    const img = targetCtx.createImageData(rect.w, rect.h)
-    const data = img.data
 
     const scale = scaleFor(nextView.zoom, pixelW, pixelH)
     const maxIter = nextView.maxIter
@@ -339,27 +382,19 @@ function App() {
           nextJuliaC,
         )
 
-        const offset = (j * rect.w + i) * 4
+        const bufferIndex = py * cache.width + px
         if (iter >= maxIter) {
-          data[offset] = 5
-          data[offset + 1] = 10
-          data[offset + 2] = 16
-          data[offset + 3] = 255
+          cache.smoothBuffer[bufferIndex] = -1
         } else {
           const logZn = Math.log(zx * zx + zy * zy) / 2
           const nu = Math.log(logZn / Math.LN2) / Math.LN2
           const smooth = iter + 1 - nu
-          const t = smooth / maxIter
-          const [r, g, b] = colorForT(t, nextColorScheme)
-          data[offset] = r
-          data[offset + 1] = g
-          data[offset + 2] = b
-          data[offset + 3] = 255
+          cache.smoothBuffer[bufferIndex] = smooth
         }
       }
     }
 
-    targetCtx.putImageData(img, rect.x, rect.y)
+    paintRectFromSmooth(targetCtx, rect, nextColorScheme, maxIter)
   }
 
   const fillCache = (
@@ -373,6 +408,10 @@ function App() {
   ) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return
+    if (!cache.smoothBuffer || cache.smoothBuffer.length !== cache.width * cache.height) {
+      cache.smoothBuffer = new Float32Array(cache.width * cache.height)
+      cache.smoothBuffer.fill(-1)
+    }
 
     const ctx = cache.ctx
     ctx.imageSmoothingEnabled = false
@@ -436,7 +475,6 @@ function App() {
       cache.zoom !== nextView.zoom ||
       cache.maxIter !== nextView.maxIter ||
       cache.fractalType !== nextFractalType ||
-      cache.colorScheme !== nextColorScheme ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
       cache.juliaC.im !== nextJuliaC.im
@@ -477,6 +515,21 @@ function App() {
     ctx.drawImage(cache.canvas, dx, dy)
     ctx.restore()
 
+    if (cache.smoothBuffer) {
+      const shifted = new Float32Array(cache.width * cache.height)
+      shifted.fill(-1)
+      for (let y = 0; y < cache.height; y += 1) {
+        const sy = y - dy
+        if (sy < 0 || sy >= cache.height) continue
+        for (let x = 0; x < cache.width; x += 1) {
+          const sx = x - dx
+          if (sx < 0 || sx >= cache.width) continue
+          shifted[y * cache.width + x] = cache.smoothBuffer[sy * cache.width + sx]
+        }
+      }
+      cache.smoothBuffer = shifted
+    }
+
     // Clear newly exposed regions and compute them.
     // Exposed vertical strips
     const rects = []
@@ -516,6 +569,8 @@ function App() {
         priorityRects: clamped,
         onDone,
       })
+    } else if (typeof onDone === 'function') {
+      onDone()
     }
 
     return { usedCache: true }
@@ -554,7 +609,7 @@ function App() {
     ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
 
     // Ensure pan-cache exists and is compatible.
-    const { reset } = ensureCache(
+    const { reset, recolorOnly } = ensureCache(
       renderW,
       renderH,
       dpr * renderScale,
@@ -569,6 +624,10 @@ function App() {
       fillCache(renderW, renderH, view, fractalType, colorScheme, juliaC, {
         onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
+    } else if (recolorOnly) {
+      // Palette change only: repaint from cached smooth data, no fractal recompute.
+      repaintEntireCache(colorScheme, view.maxIter)
+      drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH)
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
       updateCacheForPan(renderW, renderH, view, fractalType, colorScheme, juliaC, {
