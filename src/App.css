@@ -35,6 +35,34 @@
   justify-items: start;
 }
 
+.picker {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #d8e6ff;
+}
+
+.picker select,
+.picker input {
+  width: min(320px, 70vw);
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(130, 170, 255, 0.35);
+  background: rgba(8, 16, 30, 0.8);
+  color: #e9f2ff;
+  padding: 8px 10px;
+}
+
+.julia-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.picker.small input {
+  width: 150px;
+}
+
 .controls-row {
   display: flex;
   gap: 10px;
@@ -144,7 +172,9 @@ canvas.dragging {
     font-size: 1rem;
   }
 
-  .slider input {
+  .slider input,
+  .picker select,
+  .picker input {
     width: min(360px, 85vw);
   }
 

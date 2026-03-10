@@ -8,6 +8,30 @@ const DEFAULT_VIEW = {
   maxIter: 600,
 }
 
+const DEFAULT_JULIA_C = {
+  re: -0.8,
+  im: 0.156,
+}
+
+const FRACTALS = {
+  mandelbrot: {
+    label: 'Mandelbrot',
+    defaultView: { centerX: -0.5, centerY: 0, zoom: 1 },
+  },
+  julia: {
+    label: 'Julia',
+    defaultView: { centerX: 0, centerY: 0, zoom: 1.2 },
+  },
+  burningShip: {
+    label: 'Burning Ship',
+    defaultView: { centerX: -0.45, centerY: -0.5, zoom: 1.8 },
+  },
+  tricorn: {
+    label: 'Tricorn',
+    defaultView: { centerX: 0, centerY: 0, zoom: 1.2 },
+  },
+}
+
 const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 
 function hslToRgb(h, s, l) {
@@ -33,6 +57,42 @@ function hslToRgb(h, s, l) {
   ]
 }
 
+function iterateEscape(cx, cy, maxIter, fractalType, juliaC) {
+  let zx = 0
+  let zy = 0
+  let cRe = cx
+  let cIm = cy
+
+  if (fractalType === 'julia') {
+    zx = cx
+    zy = cy
+    cRe = juliaC.re
+    cIm = juliaC.im
+  }
+
+  let iter = 0
+
+  while (zx * zx + zy * zy <= 4 && iter < maxIter) {
+    let nextX = zx * zx - zy * zy + cRe
+    let nextY = 2 * zx * zy + cIm
+
+    if (fractalType === 'burningShip') {
+      const ax = Math.abs(zx)
+      const ay = Math.abs(zy)
+      nextX = ax * ax - ay * ay + cRe
+      nextY = 2 * ax * ay + cIm
+    } else if (fractalType === 'tricorn') {
+      nextY = -2 * zx * zy + cIm
+    }
+
+    zx = nextX
+    zy = nextY
+    iter += 1
+  }
+
+  return { iter, zx, zy }
+}
+
 function App() {
   const canvasRef = useRef(null)
 
@@ -46,6 +106,8 @@ function App() {
     dpr: 1,
     zoom: null,
     maxIter: null,
+    fractalType: null,
+    juliaC: null,
     // complex coordinate at the cache canvas center
     centerX: 0,
     centerY: 0,
@@ -75,6 +137,8 @@ function App() {
     pinchStartedAt: 0,
   })
 
+  const [fractalType, setFractalType] = useState('mandelbrot')
+  const [juliaC, setJuliaC] = useState(DEFAULT_JULIA_C)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
@@ -104,7 +168,7 @@ function App() {
     return 4 / (zoom * Math.min(pixelW, pixelH))
   }
 
-  const ensureCache = (pixelW, pixelH, dpr, nextView) => {
+  const ensureCache = (pixelW, pixelH, dpr, nextView, nextFractalType, nextJuliaC) => {
     const cache = cacheRef.current
 
     const cacheW = Math.floor(pixelW * PAN_CACHE_FACTOR)
@@ -114,7 +178,13 @@ function App() {
       !cache.canvas || cache.width !== cacheW || cache.height !== cacheH || cache.dpr !== dpr
 
     const needsReset =
-      needsNewCanvas || cache.zoom !== nextView.zoom || cache.maxIter !== nextView.maxIter
+      needsNewCanvas ||
+      cache.zoom !== nextView.zoom ||
+      cache.maxIter !== nextView.maxIter ||
+      cache.fractalType !== nextFractalType ||
+      !cache.juliaC ||
+      cache.juliaC.re !== nextJuliaC.re ||
+      cache.juliaC.im !== nextJuliaC.im
 
     if (needsReset) {
       const off = document.createElement('canvas')
@@ -130,6 +200,8 @@ function App() {
         dpr,
         zoom: nextView.zoom,
         maxIter: nextView.maxIter,
+        fractalType: nextFractalType,
+        juliaC: { ...nextJuliaC },
         centerX: nextView.centerX,
         centerY: nextView.centerY,
       }
@@ -140,7 +212,7 @@ function App() {
     return { reset: false }
   }
 
-  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView) => {
+  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView, nextFractalType, nextJuliaC) => {
     // rect is in cache-canvas pixel coordinates.
     const cache = cacheRef.current
     const { width: cacheW, height: cacheH } = cache
@@ -162,16 +234,13 @@ function App() {
         const px = rect.x + i
         const cx = (px - halfCacheW) * scale + cache.centerX
 
-        let zx = 0
-        let zy = 0
-        let iter = 0
-
-        while (zx * zx + zy * zy <= 4 && iter < maxIter) {
-          const xtemp = zx * zx - zy * zy + cx
-          zy = 2 * zx * zy + cy
-          zx = xtemp
-          iter += 1
-        }
+        const { iter, zx, zy } = iterateEscape(
+          cx,
+          cy,
+          maxIter,
+          nextFractalType,
+          nextJuliaC,
+        )
 
         const offset = (j * rect.w + i) * 4
         if (iter >= maxIter) {
@@ -203,6 +272,8 @@ function App() {
     pixelW,
     pixelH,
     nextView,
+    nextFractalType,
+    nextJuliaC,
     { priorityRects = null, onProgress = null } = {},
   ) => {
     const cache = cacheRef.current
@@ -232,7 +303,7 @@ function App() {
       const h = Math.min(CHUNK_ROWS, rect.h)
       const slice = { x: rect.x, y: rect.y, w: rect.w, h }
 
-      computeRect(ctx, slice, pixelW, pixelH, nextView)
+      computeRect(ctx, slice, pixelW, pixelH, nextView, nextFractalType, nextJuliaC)
 
       // Let the visible canvas update progressively while we render in chunks.
       if (typeof onProgress === 'function') onProgress()
@@ -246,10 +317,26 @@ function App() {
     processNext()
   }
 
-  const updateCacheForPan = (pixelW, pixelH, nextView, { onProgress = null } = {}) => {
+  const updateCacheForPan = (
+    pixelW,
+    pixelH,
+    nextView,
+    nextFractalType,
+    nextJuliaC,
+    { onProgress = null } = {},
+  ) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return { usedCache: false }
-    if (cache.zoom !== nextView.zoom || cache.maxIter !== nextView.maxIter) return { usedCache: false }
+    if (
+      cache.zoom !== nextView.zoom ||
+      cache.maxIter !== nextView.maxIter ||
+      cache.fractalType !== nextFractalType ||
+      !cache.juliaC ||
+      cache.juliaC.re !== nextJuliaC.re ||
+      cache.juliaC.im !== nextJuliaC.im
+    ) {
+      return { usedCache: false }
+    }
 
     const scale = scaleFor(nextView.zoom, pixelW, pixelH)
 
@@ -264,7 +351,7 @@ function App() {
     if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
       cache.centerX = nextView.centerX
       cache.centerY = nextView.centerY
-      fillCache(pixelW, pixelH, nextView, { onProgress })
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextJuliaC, { onProgress })
       return { usedCache: true }
     }
 
@@ -317,7 +404,7 @@ function App() {
       .filter((r) => r.w > 0 && r.h > 0)
 
     if (clamped.length) {
-      fillCache(pixelW, pixelH, nextView, {
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextJuliaC, {
         priorityRects: clamped,
         onProgress,
       })
@@ -357,16 +444,16 @@ function App() {
     ctx.imageSmoothingEnabled = false
 
     // Ensure pan-cache exists and is compatible.
-    const { reset } = ensureCache(pixelW, pixelH, dpr, view)
+    const { reset } = ensureCache(pixelW, pixelH, dpr, view, fractalType, juliaC)
 
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
-      fillCache(pixelW, pixelH, view, {
+      fillCache(pixelW, pixelH, view, fractalType, juliaC, {
         onProgress: () => drawViewportFromCache(pixelW, pixelH),
       })
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(pixelW, pixelH, view, {
+      updateCacheForPan(pixelW, pixelH, view, fractalType, juliaC, {
         onProgress: () => drawViewportFromCache(pixelW, pixelH),
       })
     }
@@ -379,7 +466,7 @@ function App() {
       ctx.clearRect(0, 0, pixelW, pixelH)
       ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
     }
-  }, [size, view])
+  }, [size, view, fractalType, juliaC])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
@@ -641,23 +728,74 @@ function App() {
 
   const zoomIn = () => setView((prev) => ({ ...prev, zoom: prev.zoom * 1.6 }))
   const zoomOut = () => setView((prev) => ({ ...prev, zoom: prev.zoom / 1.6 }))
-  const reset = () => setView(DEFAULT_VIEW)
+  const reset = () => {
+    const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
+    setView((prev) => ({ ...prev, ...base, maxIter: DEFAULT_VIEW.maxIter }))
+  }
 
   const tipText = useMemo(() => {
     return 'Pinch to zoom. Two-finger tap to zoom out. Drag to move.'
   }, [])
 
+  const handleFractalChange = (nextType) => {
+    setFractalType(nextType)
+    const base = FRACTALS[nextType]?.defaultView || FRACTALS.mandelbrot.defaultView
+    setView((prev) => ({ ...prev, ...base }))
+  }
+
   return (
     <div className="page">
       <header className="hero">
         <div>
-          <p className="eyebrow">Mandelbrot Explorer</p>
+          <p className="eyebrow">Escape-Time Explorer</p>
           <p className="lede">
             Tap to zoom in, drag to pan, and pinch to zoom on mobile. Two-finger tap zooms out. On
             desktop: click to zoom, Shift/right-click to zoom out.
           </p>
         </div>
         <div className="controls">
+          <label className="picker">
+            <span>Fractal</span>
+            <select
+              value={fractalType}
+              onChange={(event) => handleFractalChange(event.target.value)}
+              aria-label="Fractal type"
+            >
+              {Object.entries(FRACTALS).map(([key, spec]) => (
+                <option key={key} value={key}>
+                  {spec.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {fractalType === 'julia' && (
+            <div className="julia-controls">
+              <label className="picker small">
+                <span>Julia c (real)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={juliaC.re}
+                  onChange={(event) =>
+                    setJuliaC((prev) => ({ ...prev, re: Number(event.target.value) || 0 }))
+                  }
+                />
+              </label>
+              <label className="picker small">
+                <span>Julia c (imag)</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={juliaC.im}
+                  onChange={(event) =>
+                    setJuliaC((prev) => ({ ...prev, im: Number(event.target.value) || 0 }))
+                  }
+                />
+              </label>
+            </div>
+          )}
+
           <div className="controls-row">
             <button className="btn" onClick={zoomIn}>
               Zoom In
@@ -701,10 +839,14 @@ function App() {
             onContextMenu={handleCanvasContextMenu}
             onWheel={handleWheel}
             role="img"
-            aria-label="Mandelbrot set"
+            aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} set`}
           />
         </div>
         <div className="meta">
+          <div>
+            <span>Fractal</span>
+            <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
+          </div>
           <div>
             <span>Center</span>
             <strong>

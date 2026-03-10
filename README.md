@@ -1,16 +1,48 @@
-# React + Vite
+# Mandelbrot Explorer (Escape-Time Fractals)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interactive GitHub Pages app for exploring classic escape-time fractals in the browser.
 
-Currently, two official plugins are available:
+## Included fractals
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Mandelbrot (default)
+- Julia (with configurable constant `c`)
+- Burning Ship
+- Tricorn
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Click/tap to zoom in
+- Shift+click or right-click to zoom out
+- Pinch-to-zoom on touch devices
+- Drag to pan
+- Two-finger tap to zoom out (mobile)
+- Iteration slider
+- Pan cache for smoother movement at fixed zoom/iteration settings
 
-## Expanding the ESLint configuration
+## Development
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm ci
+npm run dev
+```
+
+## Build
+
+```bash
+npm run build
+npm run preview
+```
+
+## Lint
+
+```bash
+npm run lint
+```
+
+## Deploy
+
+This repo is configured for GitHub Pages via GitHub Actions.
+
+Live URL:
+
+- https://andre-larsson.github.io/mandelbrot/
