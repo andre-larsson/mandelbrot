@@ -32,6 +32,14 @@ const FRACTALS = {
   },
 }
 
+const COLOR_SCHEMES = {
+  aurora: { label: 'Aurora' },
+  fire: { label: 'Fire' },
+  ocean: { label: 'Ocean' },
+  grayscale: { label: 'Grayscale' },
+  neon: { label: 'Neon' },
+}
+
 const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
 
 function hslToRgb(h, s, l) {
@@ -55,6 +63,40 @@ function hslToRgb(h, s, l) {
     Math.round((g1 + m) * 255),
     Math.round((b1 + m) * 255),
   ]
+}
+
+function colorForT(t, scheme) {
+  if (scheme === 'fire') {
+    const hue = 10 + 55 * t
+    const sat = 0.95
+    const light = 0.15 + 0.7 * Math.pow(t, 0.75)
+    return hslToRgb(hue % 360, sat, light)
+  }
+
+  if (scheme === 'ocean') {
+    const hue = 180 + 80 * t
+    const sat = 0.85
+    const light = 0.2 + 0.55 * t
+    return hslToRgb(hue % 360, sat, light)
+  }
+
+  if (scheme === 'grayscale') {
+    const gray = Math.max(0, Math.min(255, Math.round(255 * Math.pow(t, 0.8))))
+    return [gray, gray, gray]
+  }
+
+  if (scheme === 'neon') {
+    const hue = (300 + 420 * t) % 360
+    const sat = 1
+    const light = 0.35 + 0.4 * (0.5 + 0.5 * Math.sin(16 * t))
+    return hslToRgb(hue, sat, light)
+  }
+
+  // aurora (default)
+  const hue = 210 + 140 * t
+  const sat = 0.75
+  const light = 0.3 + 0.5 * t
+  return hslToRgb(hue % 360, sat, light)
 }
 
 function iterateEscape(cx, cy, maxIter, fractalType, juliaC) {
@@ -107,6 +149,7 @@ function App() {
     zoom: null,
     maxIter: null,
     fractalType: null,
+    colorScheme: null,
     juliaC: null,
     // complex coordinate at the cache canvas center
     centerX: 0,
@@ -138,6 +181,7 @@ function App() {
   })
 
   const [fractalType, setFractalType] = useState('mandelbrot')
+  const [colorScheme, setColorScheme] = useState('aurora')
   const [juliaC, setJuliaC] = useState(DEFAULT_JULIA_C)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
@@ -168,7 +212,15 @@ function App() {
     return 4 / (zoom * Math.min(pixelW, pixelH))
   }
 
-  const ensureCache = (pixelW, pixelH, dpr, nextView, nextFractalType, nextJuliaC) => {
+  const ensureCache = (
+    pixelW,
+    pixelH,
+    dpr,
+    nextView,
+    nextFractalType,
+    nextColorScheme,
+    nextJuliaC,
+  ) => {
     const cache = cacheRef.current
 
     const cacheW = Math.floor(pixelW * PAN_CACHE_FACTOR)
@@ -182,6 +234,7 @@ function App() {
       cache.zoom !== nextView.zoom ||
       cache.maxIter !== nextView.maxIter ||
       cache.fractalType !== nextFractalType ||
+      cache.colorScheme !== nextColorScheme ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
       cache.juliaC.im !== nextJuliaC.im
@@ -201,6 +254,7 @@ function App() {
         zoom: nextView.zoom,
         maxIter: nextView.maxIter,
         fractalType: nextFractalType,
+        colorScheme: nextColorScheme,
         juliaC: { ...nextJuliaC },
         centerX: nextView.centerX,
         centerY: nextView.centerY,
@@ -212,7 +266,16 @@ function App() {
     return { reset: false }
   }
 
-  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView, nextFractalType, nextJuliaC) => {
+  const computeRect = (
+    targetCtx,
+    rect,
+    pixelW,
+    pixelH,
+    nextView,
+    nextFractalType,
+    nextColorScheme,
+    nextJuliaC,
+  ) => {
     // rect is in cache-canvas pixel coordinates.
     const cache = cacheRef.current
     const { width: cacheW, height: cacheH } = cache
@@ -253,10 +316,7 @@ function App() {
           const nu = Math.log(logZn / Math.LN2) / Math.LN2
           const smooth = iter + 1 - nu
           const t = smooth / maxIter
-          const hue = 210 + 140 * t
-          const sat = 0.75
-          const light = 0.3 + 0.5 * t
-          const [r, g, b] = hslToRgb(hue % 360, sat, light)
+          const [r, g, b] = colorForT(t, nextColorScheme)
           data[offset] = r
           data[offset + 1] = g
           data[offset + 2] = b
@@ -273,6 +333,7 @@ function App() {
     pixelH,
     nextView,
     nextFractalType,
+    nextColorScheme,
     nextJuliaC,
     { priorityRects = null, onProgress = null } = {},
   ) => {
@@ -303,7 +364,16 @@ function App() {
       const h = Math.min(CHUNK_ROWS, rect.h)
       const slice = { x: rect.x, y: rect.y, w: rect.w, h }
 
-      computeRect(ctx, slice, pixelW, pixelH, nextView, nextFractalType, nextJuliaC)
+      computeRect(
+        ctx,
+        slice,
+        pixelW,
+        pixelH,
+        nextView,
+        nextFractalType,
+        nextColorScheme,
+        nextJuliaC,
+      )
 
       // Let the visible canvas update progressively while we render in chunks.
       if (typeof onProgress === 'function') onProgress()
@@ -322,6 +392,7 @@ function App() {
     pixelH,
     nextView,
     nextFractalType,
+    nextColorScheme,
     nextJuliaC,
     { onProgress = null } = {},
   ) => {
@@ -331,6 +402,7 @@ function App() {
       cache.zoom !== nextView.zoom ||
       cache.maxIter !== nextView.maxIter ||
       cache.fractalType !== nextFractalType ||
+      cache.colorScheme !== nextColorScheme ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
       cache.juliaC.im !== nextJuliaC.im
@@ -351,7 +423,9 @@ function App() {
     if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
       cache.centerX = nextView.centerX
       cache.centerY = nextView.centerY
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextJuliaC, { onProgress })
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
+        onProgress,
+      })
       return { usedCache: true }
     }
 
@@ -404,7 +478,7 @@ function App() {
       .filter((r) => r.w > 0 && r.h > 0)
 
     if (clamped.length) {
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextJuliaC, {
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
         priorityRects: clamped,
         onProgress,
       })
@@ -444,16 +518,16 @@ function App() {
     ctx.imageSmoothingEnabled = false
 
     // Ensure pan-cache exists and is compatible.
-    const { reset } = ensureCache(pixelW, pixelH, dpr, view, fractalType, juliaC)
+    const { reset } = ensureCache(pixelW, pixelH, dpr, view, fractalType, colorScheme, juliaC)
 
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
-      fillCache(pixelW, pixelH, view, fractalType, juliaC, {
+      fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
         onProgress: () => drawViewportFromCache(pixelW, pixelH),
       })
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(pixelW, pixelH, view, fractalType, juliaC, {
+      updateCacheForPan(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
         onProgress: () => drawViewportFromCache(pixelW, pixelH),
       })
     }
@@ -466,7 +540,7 @@ function App() {
       ctx.clearRect(0, 0, pixelW, pixelH)
       ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
     }
-  }, [size, view, fractalType, juliaC])
+  }, [size, view, fractalType, colorScheme, juliaC])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
@@ -769,6 +843,21 @@ function App() {
             </select>
           </label>
 
+          <label className="picker">
+            <span>Colors</span>
+            <select
+              value={colorScheme}
+              onChange={(event) => setColorScheme(event.target.value)}
+              aria-label="Color scheme"
+            >
+              {Object.entries(COLOR_SCHEMES).map(([key, spec]) => (
+                <option key={key} value={key}>
+                  {spec.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
           {fractalType === 'julia' && (
             <div className="julia-controls">
               <label className="picker small">
@@ -846,6 +935,10 @@ function App() {
           <div>
             <span>Fractal</span>
             <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
+          </div>
+          <div>
+            <span>Colors</span>
+            <strong>{COLOR_SCHEMES[colorScheme]?.label || 'Aurora'}</strong>
           </div>
           <div>
             <span>Center</span>
