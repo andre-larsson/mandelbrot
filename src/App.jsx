@@ -243,6 +243,11 @@ function App() {
     return Math.max(0.25, internalScale * 0.5)
   }, [adaptiveQuality, internalScale, interactionMode])
 
+  const renderMaxIter = useMemo(() => {
+    if (!adaptiveQuality || interactionMode !== 'zoom') return view.maxIter
+    return Math.max(100, Math.floor(view.maxIter * 0.55))
+  }, [adaptiveQuality, interactionMode, view.maxIter])
+
   const scaleFor = (zoom, pixelW, pixelH) => {
     return 4 / (zoom * Math.min(pixelW, pixelH))
   }
@@ -620,12 +625,14 @@ function App() {
     if (!ctx) return
     ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
 
+    const renderView = { ...view, maxIter: renderMaxIter }
+
     // Ensure pan-cache exists and is compatible.
     const { reset, recolorOnly } = ensureCache(
       renderW,
       renderH,
       dpr * renderScale,
-      view,
+      renderView,
       fractalType,
       colorScheme,
       juliaC,
@@ -633,21 +640,21 @@ function App() {
 
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
-      fillCache(renderW, renderH, view, fractalType, colorScheme, juliaC, {
+      fillCache(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
         onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     } else if (recolorOnly) {
       // Palette change only: repaint from cached smooth data, no fractal recompute.
-      repaintEntireCache(colorScheme, view.maxIter)
+      repaintEntireCache(colorScheme, renderView.maxIter)
       drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH)
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(renderW, renderH, view, fractalType, colorScheme, juliaC, {
+      updateCacheForPan(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
         onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     }
 
-  }, [size, view, fractalType, colorScheme, juliaC, renderScale])
+  }, [size, view, fractalType, colorScheme, juliaC, renderScale, renderMaxIter])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
@@ -938,7 +945,10 @@ function App() {
     return 'Pinch to zoom. Two-finger tap to zoom out. Drag to move.'
   }, [])
 
-  const previewActive = adaptiveQuality && interactionMode === 'zoom' && renderScale < internalScale
+  const previewActive =
+    adaptiveQuality &&
+    interactionMode === 'zoom' &&
+    (renderScale < internalScale || renderMaxIter < view.maxIter)
 
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
