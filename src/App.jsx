@@ -601,8 +601,8 @@ function App() {
     const renderW = Math.max(1, Math.floor(fullPixelW * renderScale))
     const renderH = Math.max(1, Math.floor(fullPixelH * renderScale))
 
-    canvas.width = fullPixelW
-    canvas.height = fullPixelH
+    if (canvas.width !== fullPixelW) canvas.width = fullPixelW
+    if (canvas.height !== fullPixelH) canvas.height = fullPixelH
 
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
