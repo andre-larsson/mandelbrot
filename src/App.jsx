@@ -516,17 +516,29 @@ function App() {
     ctx.restore()
 
     if (cache.smoothBuffer) {
-      const shifted = new Float32Array(cache.width * cache.height)
+      const w = cache.width
+      const h = cache.height
+      const shifted = new Float32Array(w * h)
       shifted.fill(-1)
-      for (let y = 0; y < cache.height; y += 1) {
-        const sy = y - dy
-        if (sy < 0 || sy >= cache.height) continue
-        for (let x = 0; x < cache.width; x += 1) {
-          const sx = x - dx
-          if (sx < 0 || sx >= cache.width) continue
-          shifted[y * cache.width + x] = cache.smoothBuffer[sy * cache.width + sx]
+
+      const xStart = Math.max(0, dx)
+      const xEnd = Math.min(w, w + dx)
+      const copyLen = xEnd - xStart
+
+      if (copyLen > 0) {
+        for (let y = 0; y < h; y += 1) {
+          const sy = y - dy
+          if (sy < 0 || sy >= h) continue
+
+          const dstRow = y * w
+          const srcRow = sy * w
+          const dstStart = dstRow + xStart
+          const srcStart = srcRow + (xStart - dx)
+
+          shifted.set(cache.smoothBuffer.subarray(srcStart, srcStart + copyLen), dstStart)
         }
       }
+
       cache.smoothBuffer = shifted
     }
 
