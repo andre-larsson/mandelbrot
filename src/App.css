@@ -59,6 +59,14 @@
   flex-wrap: wrap;
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d8e6ff;
+  font-size: 0.9rem;
+}
+
 .picker.small input {
   width: 150px;
 }

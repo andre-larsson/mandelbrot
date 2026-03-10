@@ -182,10 +182,15 @@ function App() {
 
   const [fractalType, setFractalType] = useState('mandelbrot')
   const [colorScheme, setColorScheme] = useState('aurora')
+  const [internalScale, setInternalScale] = useState(1)
+  const [adaptiveQuality, setAdaptiveQuality] = useState(true)
   const [juliaC, setJuliaC] = useState(DEFAULT_JULIA_C)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
+  const [isInteracting, setIsInteracting] = useState(false)
+
+  const interactionTimerRef = useRef(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -207,6 +212,25 @@ function App() {
     observer.observe(parent)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    return () => {
+      if (interactionTimerRef.current) {
+        clearTimeout(interactionTimerRef.current)
+      }
+    }
+  }, [])
+
+  const noteInteraction = () => {
+    setIsInteracting(true)
+    if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
+    interactionTimerRef.current = setTimeout(() => setIsInteracting(false), 140)
+  }
+
+  const renderScale = useMemo(() => {
+    if (!adaptiveQuality || !isInteracting) return internalScale
+    return Math.max(0.35, internalScale * 0.6)
+  }, [adaptiveQuality, internalScale, isInteracting])
 
   const scaleFor = (zoom, pixelW, pixelH) => {
     return 4 / (zoom * Math.min(pixelW, pixelH))
@@ -492,55 +516,65 @@ function App() {
     if (!canvas) return
     if (!size.width || !size.height) return
 
-    const drawViewportFromCache = (pixelW, pixelH) => {
+    const drawViewportFromCache = (renderW, renderH, fullW, fullH) => {
       const ctx = canvas.getContext('2d', { alpha: false })
       if (!ctx) return
-      ctx.imageSmoothingEnabled = false
+      ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
 
       const cache = cacheRef.current
       if (!cache.canvas) return
 
-      const srcX = Math.floor((cache.width - pixelW) / 2)
-      const srcY = Math.floor((cache.height - pixelH) / 2)
-      ctx.clearRect(0, 0, pixelW, pixelH)
-      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
+      const srcX = Math.floor((cache.width - renderW) / 2)
+      const srcY = Math.floor((cache.height - renderH) / 2)
+      ctx.clearRect(0, 0, fullW, fullH)
+      ctx.drawImage(cache.canvas, srcX, srcY, renderW, renderH, 0, 0, fullW, fullH)
     }
 
     const dpr = size.dpr
-    const pixelW = Math.floor(size.width * dpr)
-    const pixelH = Math.floor(size.height * dpr)
+    const fullPixelW = Math.floor(size.width * dpr)
+    const fullPixelH = Math.floor(size.height * dpr)
+    const renderW = Math.max(1, Math.floor(fullPixelW * renderScale))
+    const renderH = Math.max(1, Math.floor(fullPixelH * renderScale))
 
-    canvas.width = pixelW
-    canvas.height = pixelH
+    canvas.width = fullPixelW
+    canvas.height = fullPixelH
 
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
-    ctx.imageSmoothingEnabled = false
+    ctx.imageSmoothingEnabled = renderScale >= 0.99 ? false : true
 
     // Ensure pan-cache exists and is compatible.
-    const { reset } = ensureCache(pixelW, pixelH, dpr, view, fractalType, colorScheme, juliaC)
+    const { reset } = ensureCache(
+      renderW,
+      renderH,
+      dpr * renderScale,
+      view,
+      fractalType,
+      colorScheme,
+      juliaC,
+    )
 
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
-      fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
-        onProgress: () => drawViewportFromCache(pixelW, pixelH),
+      fillCache(renderW, renderH, view, fractalType, colorScheme, juliaC, {
+        onProgress: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
-      updateCacheForPan(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
-        onProgress: () => drawViewportFromCache(pixelW, pixelH),
+      updateCacheForPan(renderW, renderH, view, fractalType, colorScheme, juliaC, {
+        onProgress: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     }
 
     // Draw viewport from cache
     const cache = cacheRef.current
     if (cache.canvas) {
-      const srcX = Math.floor((cache.width - pixelW) / 2)
-      const srcY = Math.floor((cache.height - pixelH) / 2)
-      ctx.clearRect(0, 0, pixelW, pixelH)
-      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
+      const srcX = Math.floor((cache.width - renderW) / 2)
+      const srcY = Math.floor((cache.height - renderH) / 2)
+      ctx.clearRect(0, 0, fullPixelW, fullPixelH)
+      ctx.drawImage(cache.canvas, srcX, srcY, renderW, renderH, 0, 0, fullPixelW, fullPixelH)
     }
-  }, [size, view, fractalType, colorScheme, juliaC])
+  }, [size, view, fractalType, colorScheme, juliaC, renderScale])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
@@ -605,6 +639,7 @@ function App() {
   }
 
   const handlePointerDown = (event) => {
+    noteInteraction()
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -640,6 +675,7 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
+    noteInteraction()
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -708,6 +744,7 @@ function App() {
   }
 
   const finishPointer = (event) => {
+    noteInteraction()
     const canvas = canvasRef.current
     const g = gestureRef.current
 
@@ -777,11 +814,13 @@ function App() {
   }
 
   const handleCanvasContextMenu = (event) => {
+    noteInteraction()
     event.preventDefault()
     updateCenterFromPointer(event, 1 / 1.8)
   }
 
   const handleWheel = (event) => {
+    noteInteraction()
     // Zoom towards cursor position (desktop mouse wheel / trackpad).
     // Prevent page scroll while interacting with the canvas.
     event.preventDefault()
@@ -856,6 +895,28 @@ function App() {
                 </option>
               ))}
             </select>
+          </label>
+
+          <label className="picker">
+            <span>Internal resolution</span>
+            <select
+              value={String(internalScale)}
+              onChange={(event) => setInternalScale(Number(event.target.value))}
+              aria-label="Internal resolution"
+            >
+              <option value="1">100%</option>
+              <option value="0.75">75%</option>
+              <option value="0.5">50%</option>
+            </select>
+          </label>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={adaptiveQuality}
+              onChange={(event) => setAdaptiveQuality(event.target.checked)}
+            />
+            <span>Adaptive quality while moving</span>
           </label>
 
           {fractalType === 'julia' && (
@@ -949,6 +1010,10 @@ function App() {
           <div>
             <span>Zoom</span>
             <strong>{view.zoom.toFixed(2)}x</strong>
+          </div>
+          <div>
+            <span>Render</span>
+            <strong>{Math.round(renderScale * 100)}%</strong>
           </div>
           <div>
             <span>Tip</span>
