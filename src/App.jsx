@@ -369,7 +369,7 @@ function App() {
     nextFractalType,
     nextColorScheme,
     nextJuliaC,
-    { priorityRects = null, onProgress = null } = {},
+    { priorityRects = null, onDone = null } = {},
   ) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return
@@ -393,7 +393,10 @@ function App() {
 
       // Find a rect that still has rows left.
       const rect = allRects.find((r) => r.h > 0)
-      if (!rect) return
+      if (!rect) {
+        if (typeof onDone === 'function') onDone()
+        return
+      }
 
       const h = Math.min(CHUNK_ROWS, rect.h)
       const slice = { x: rect.x, y: rect.y, w: rect.w, h }
@@ -408,9 +411,6 @@ function App() {
         nextColorScheme,
         nextJuliaC,
       )
-
-      // Let the visible canvas update progressively while we render in chunks.
-      if (typeof onProgress === 'function') onProgress()
 
       rect.y += h
       rect.h -= h
@@ -428,7 +428,7 @@ function App() {
     nextFractalType,
     nextColorScheme,
     nextJuliaC,
-    { onProgress = null } = {},
+    { onDone = null } = {},
   ) => {
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return { usedCache: false }
@@ -458,7 +458,7 @@ function App() {
       cache.centerX = nextView.centerX
       cache.centerY = nextView.centerY
       fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
-        onProgress,
+        onDone,
       })
       return { usedCache: true }
     }
@@ -514,7 +514,7 @@ function App() {
     if (clamped.length) {
       fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
         priorityRects: clamped,
-        onProgress,
+        onDone,
       })
     }
 
@@ -567,23 +567,15 @@ function App() {
     if (reset) {
       // Fresh cache: compute entire cache (in chunks)
       fillCache(renderW, renderH, view, fractalType, colorScheme, juliaC, {
-        onProgress: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
+        onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     } else {
       // Same zoom/iter: try to update cache by shifting + computing only new strips
       updateCacheForPan(renderW, renderH, view, fractalType, colorScheme, juliaC, {
-        onProgress: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
+        onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
       })
     }
 
-    // Draw viewport from cache
-    const cache = cacheRef.current
-    if (cache.canvas) {
-      const srcX = Math.floor((cache.width - renderW) / 2)
-      const srcY = Math.floor((cache.height - renderH) / 2)
-      ctx.clearRect(0, 0, fullPixelW, fullPixelH)
-      ctx.drawImage(cache.canvas, srcX, srcY, renderW, renderH, 0, 0, fullPixelW, fullPixelH)
-    }
   }, [size, view, fractalType, colorScheme, juliaC, renderScale])
 
   const screenToComplex = (rect, x, y, viewLike) => {
