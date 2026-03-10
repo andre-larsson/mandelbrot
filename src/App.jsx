@@ -248,7 +248,7 @@ function App() {
 
   const renderMaxIter = useMemo(() => {
     if (!adaptiveQuality || interactionMode !== 'zoom') return view.maxIter
-    return Math.max(100, Math.floor(view.maxIter * 0.55))
+    return Math.max(80, Math.floor(view.maxIter * 0.35))
   }, [adaptiveQuality, interactionMode, view.maxIter])
 
   const scaleFor = (zoom, pixelW, pixelH) => {
@@ -480,6 +480,9 @@ function App() {
     nextJuliaC,
     { onDone = null } = {},
   ) => {
+    // Any pan update should cancel in-flight compute for stale geometry.
+    renderIdRef.current += 1
+
     const cache = cacheRef.current
     if (!cache.canvas || !cache.ctx) return { usedCache: false }
     if (
