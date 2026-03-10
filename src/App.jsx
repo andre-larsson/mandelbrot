@@ -200,6 +200,8 @@ function App() {
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
   const [interactionMode, setInteractionMode] = useState('idle')
+  const [displayedScale, setDisplayedScale] = useState(1)
+  const [displayedMaxIter, setDisplayedMaxIter] = useState(DEFAULT_VIEW.maxIter)
 
   const interactionTimerRef = useRef(null)
 
@@ -619,6 +621,9 @@ function App() {
       const srcY = Math.floor((cache.height - renderH) / 2)
       ctx.clearRect(0, 0, fullW, fullH)
       ctx.drawImage(cache.canvas, srcX, srcY, renderW, renderH, 0, 0, fullW, fullH)
+
+      setDisplayedScale(renderW / fullW)
+      setDisplayedMaxIter(renderView.maxIter)
     }
 
     const dpr = size.dpr
@@ -956,9 +961,7 @@ function App() {
   }, [])
 
   const previewActive =
-    adaptiveQuality &&
-    interactionMode === 'zoom' &&
-    (renderScale < internalScale || renderMaxIter < view.maxIter)
+    displayedScale < internalScale - 0.001 || displayedMaxIter < view.maxIter
 
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
@@ -1124,7 +1127,7 @@ function App() {
           </div>
           <div>
             <span>Render</span>
-            <strong>{Math.round(renderScale * 100)}%</strong>
+            <strong>{Math.round(displayedScale * 100)}%</strong>
           </div>
           <div>
             <span>Quality</span>
