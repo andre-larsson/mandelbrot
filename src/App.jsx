@@ -640,15 +640,13 @@ function App() {
       .filter((r) => r.w > 0 && r.h > 0)
 
     if (clamped.length) {
-      if (dragRef.current.active) {
-        cache.geometryDirty = true
-        if (typeof onDone === 'function') onDone()
-      } else {
-        fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
-          priorityRects: clamped,
-          onDone,
-        })
-      }
+      // Always render exposed strips, even during active drag.
+      // While interacting, nextView carries preview settings (low iter),
+      // then we promote to full quality after idle timeout.
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
+        priorityRects: clamped,
+        onDone,
+      })
     } else if (typeof onDone === 'function') {
       onDone()
     }
