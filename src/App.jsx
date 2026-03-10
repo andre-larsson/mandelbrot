@@ -919,8 +919,8 @@ function App() {
               aria-label="Internal resolution"
             >
               <option value="1">100%</option>
-              <option value="0.75">75%</option>
               <option value="0.5">50%</option>
+              <option value="0.25">25%</option>
             </select>
           </label>
 
