@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 const DEFAULT_VIEW = {
@@ -40,11 +40,12 @@ const COLOR_SCHEMES = {
   neon: { label: 'Neon' },
 }
 
-const PAN_CACHE_FACTOR = 2 // cache canvas is 2x viewport in each dimension
-const ZOOM_QUANT_STEP = 1.015 // ~1.5% zoom buckets
+const PAN_CACHE_FACTOR = 2
+const ZOOM_QUANT_STEP = 1.015
 const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 const PAN_SWIPE_MULTIPLIER = 1.7
+const MINIMAP_MAX_ITER = 180
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -96,7 +97,6 @@ function colorForT(t, scheme) {
     return hslToRgb(hue, sat, light)
   }
 
-  // aurora (default)
   const hue = 210 + 140 * t
   const sat = 0.75
   const light = 0.3 + 0.5 * t
@@ -145,10 +145,64 @@ function iterateEscape(cx, cy, maxIter, fractalType, juliaC) {
   return { iter, zx, zy }
 }
 
+function scaleFor(zoom, pixelW, pixelH) {
+  return 4 / (zoom * Math.min(pixelW, pixelH))
+}
+
+function complexToPixel(cx, cy, renderView, pixelW, pixelH) {
+  const scale = scaleFor(renderView.zoom, pixelW, pixelH)
+  return {
+    x: (cx - renderView.centerX) / scale + pixelW / 2,
+    y: (cy - renderView.centerY) / scale + pixelH / 2,
+  }
+}
+
+function pixelToComplex(px, py, renderView, pixelW, pixelH) {
+  const scale = scaleFor(renderView.zoom, pixelW, pixelH)
+  return {
+    x: (px - pixelW / 2) * scale + renderView.centerX,
+    y: (py - pixelH / 2) * scale + renderView.centerY,
+  }
+}
+
+function renderFractalImageData(ctx, pixelW, pixelH, renderView, fractalType, colorScheme, juliaC) {
+  const img = ctx.createImageData(pixelW, pixelH)
+  const data = img.data
+  const scale = scaleFor(renderView.zoom, pixelW, pixelH)
+  const halfW = pixelW / 2
+  const halfH = pixelH / 2
+
+  for (let py = 0; py < pixelH; py += 1) {
+    const cy = (py - halfH) * scale + renderView.centerY
+    for (let px = 0; px < pixelW; px += 1) {
+      const cx = (px - halfW) * scale + renderView.centerX
+      const { iter, zx, zy } = iterateEscape(cx, cy, renderView.maxIter, fractalType, juliaC)
+      const offset = (py * pixelW + px) * 4
+
+      if (iter >= renderView.maxIter) {
+        data[offset] = 5
+        data[offset + 1] = 10
+        data[offset + 2] = 16
+        data[offset + 3] = 255
+      } else {
+        const logZn = Math.log(zx * zx + zy * zy) / 2
+        const nu = Math.log(logZn / Math.LN2) / Math.LN2
+        const smooth = iter + 1 - nu
+        const [r, g, b] = colorForT(smooth / renderView.maxIter, colorScheme)
+        data[offset] = r
+        data[offset + 1] = g
+        data[offset + 2] = b
+        data[offset + 3] = 255
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0)
+}
+
 function App() {
   const canvasRef = useRef(null)
-
-  // Rendering + pan-cache state
+  const minimapRef = useRef(null)
   const renderIdRef = useRef(0)
   const cacheRef = useRef({
     canvas: null,
@@ -162,14 +216,11 @@ function App() {
     colorScheme: null,
     juliaC: null,
     smoothBuffer: null,
-    geometryDirty: false,
     hasCompleteFrame: false,
-    // complex coordinate at the cache canvas center
     centerX: 0,
     centerY: 0,
   })
 
-  // Single-finger pan state
   const dragRef = useRef({
     active: false,
     pointerId: null,
@@ -181,7 +232,6 @@ function App() {
     startZoom: DEFAULT_VIEW.zoom,
   })
 
-  // Multi-touch pinch state
   const gestureRef = useRef({
     pointers: new Map(),
     mode: 'none',
@@ -195,17 +245,10 @@ function App() {
 
   const [fractalType, setFractalType] = useState('mandelbrot')
   const [colorScheme, setColorScheme] = useState('aurora')
-  const [internalScale, setInternalScale] = useState(1)
-  const [adaptiveQuality, setAdaptiveQuality] = useState(true)
   const [juliaC, setJuliaC] = useState(DEFAULT_JULIA_C)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
-  const [interactionMode, setInteractionMode] = useState('idle')
-  const [displayedScale, setDisplayedScale] = useState(1)
-  const [displayedMaxIter, setDisplayedMaxIter] = useState(DEFAULT_VIEW.maxIter)
-
-  const interactionTimerRef = useRef(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -216,67 +259,19 @@ function App() {
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect
       if (!rect) return
-      const next = {
+      setSize({
         width: Math.max(1, Math.floor(rect.width)),
         height: Math.max(1, Math.floor(rect.height)),
         dpr: window.devicePixelRatio || 1,
-      }
-      setSize(next)
+      })
     })
 
     observer.observe(parent)
     return () => observer.disconnect()
   }, [])
 
-  useEffect(() => {
-    return () => {
-      if (interactionTimerRef.current) {
-        clearTimeout(interactionTimerRef.current)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    // Force a true recompute when user changes internal resolution.
+  const ensureCache = (pixelW, pixelH, dpr, nextView, nextFractalType, nextColorScheme, nextJuliaC) => {
     const cache = cacheRef.current
-    cache.geometryDirty = true
-    cache.hasCompleteFrame = false
-  }, [internalScale])
-
-  const noteInteraction = (mode = 'pan') => {
-    setInteractionMode(mode)
-    if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current)
-    // If no interaction for ~1s, switch back to accurate render mode.
-    interactionTimerRef.current = setTimeout(() => setInteractionMode('idle'), 1000)
-  }
-
-  const renderScale = useMemo(() => {
-    if (!adaptiveQuality) return internalScale
-    if (interactionMode === 'idle') return internalScale
-    return Math.max(0.25, internalScale * 0.5)
-  }, [adaptiveQuality, internalScale, interactionMode])
-
-  const renderMaxIter = useMemo(() => {
-    if (!adaptiveQuality || interactionMode === 'idle') return view.maxIter
-    return Math.max(10, Math.floor(view.maxIter * 0.1))
-  }, [adaptiveQuality, interactionMode, view.maxIter])
-
-  const scaleFor = (zoom, pixelW, pixelH) => {
-    return 4 / (zoom * Math.min(pixelW, pixelH))
-  }
-
-  const ensureCache = (
-    pixelW,
-    pixelH,
-    dpr,
-    nextView,
-    nextFractalType,
-    nextColorScheme,
-    nextJuliaC,
-    allowDirtyReset,
-  ) => {
-    const cache = cacheRef.current
-
     const cacheW = Math.floor(pixelW * PAN_CACHE_FACTOR)
     const cacheH = Math.floor(pixelH * PAN_CACHE_FACTOR)
 
@@ -290,8 +285,7 @@ function App() {
       cache.fractalType !== nextFractalType ||
       !cache.juliaC ||
       cache.juliaC.re !== nextJuliaC.re ||
-      cache.juliaC.im !== nextJuliaC.im ||
-      (cache.geometryDirty && allowDirtyReset)
+      cache.juliaC.im !== nextJuliaC.im
 
     if (needsGeometryReset) {
       const off = document.createElement('canvas')
@@ -311,7 +305,6 @@ function App() {
         colorScheme: nextColorScheme,
         juliaC: { ...nextJuliaC },
         smoothBuffer: new Float32Array(cacheW * cacheH),
-        geometryDirty: false,
         hasCompleteFrame: false,
         centerX: nextView.centerX,
         centerY: nextView.centerY,
@@ -349,8 +342,7 @@ function App() {
           data[offset + 2] = 16
           data[offset + 3] = 255
         } else {
-          const t = smooth / maxIter
-          const [r, g, b] = colorForT(t, nextColorScheme)
+          const [r, g, b] = colorForT(smooth / maxIter, nextColorScheme)
           data[offset] = r
           data[offset + 1] = g
           data[offset + 2] = b
@@ -368,26 +360,11 @@ function App() {
     paintRectFromSmooth(cache.ctx, { x: 0, y: 0, w: cache.width, h: cache.height }, nextColorScheme, maxIter)
   }
 
-  const computeRect = (
-    targetCtx,
-    rect,
-    pixelW,
-    pixelH,
-    nextView,
-    nextFractalType,
-    nextColorScheme,
-    nextJuliaC,
-  ) => {
-    // rect is in cache-canvas pixel coordinates.
+  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC) => {
     const cache = cacheRef.current
-    const { width: cacheW, height: cacheH } = cache
-
     const scale = scaleFor(nextView.zoom, pixelW, pixelH)
-    const maxIter = nextView.maxIter
-
-    // Map cache pixel -> complex using cache center.
-    const halfCacheW = cacheW / 2
-    const halfCacheH = cacheH / 2
+    const halfCacheW = cache.width / 2
+    const halfCacheH = cache.height / 2
 
     for (let j = 0; j < rect.h; j += 1) {
       const py = rect.y + j
@@ -395,28 +372,20 @@ function App() {
       for (let i = 0; i < rect.w; i += 1) {
         const px = rect.x + i
         const cx = (px - halfCacheW) * scale + cache.centerX
-
-        const { iter, zx, zy } = iterateEscape(
-          cx,
-          cy,
-          maxIter,
-          nextFractalType,
-          nextJuliaC,
-        )
-
+        const { iter, zx, zy } = iterateEscape(cx, cy, nextView.maxIter, nextFractalType, nextJuliaC)
         const bufferIndex = py * cache.width + px
-        if (iter >= maxIter) {
+
+        if (iter >= nextView.maxIter) {
           cache.smoothBuffer[bufferIndex] = -1
         } else {
           const logZn = Math.log(zx * zx + zy * zy) / 2
           const nu = Math.log(logZn / Math.LN2) / Math.LN2
-          const smooth = iter + 1 - nu
-          cache.smoothBuffer[bufferIndex] = smooth
+          cache.smoothBuffer[bufferIndex] = iter + 1 - nu
         }
       }
     }
 
-    paintRectFromSmooth(targetCtx, rect, nextColorScheme, maxIter)
+    paintRectFromSmooth(targetCtx, rect, nextColorScheme, nextView.maxIter)
   }
 
   const fillCache = (
@@ -440,41 +409,24 @@ function App() {
 
     renderIdRef.current += 1
     const renderId = renderIdRef.current
-
-    // Queue rectangles to compute (cache pixels)
-    const allRects = priorityRects || [
-      { x: 0, y: 0, w: cache.width, h: cache.height },
-    ]
-
-    // Process in slices; use larger chunks for low-iteration preview passes.
-    const CHUNK_ROWS = nextView.maxIter <= 260 ? 128 : 32
+    const allRects = priorityRects || [{ x: 0, y: 0, w: cache.width, h: cache.height }]
+    const chunkRows = nextView.maxIter <= 260 ? 128 : 32
 
     cache.hasCompleteFrame = false
 
     const processNext = () => {
       if (renderId !== renderIdRef.current) return
-
-      // Find a rect that still has rows left.
-      const rect = allRects.find((r) => r.h > 0)
+      const rect = allRects.find((item) => item.h > 0)
       if (!rect) {
         cache.hasCompleteFrame = true
         if (typeof onDone === 'function') onDone()
         return
       }
 
-      const h = Math.min(CHUNK_ROWS, rect.h)
+      const h = Math.min(chunkRows, rect.h)
       const slice = { x: rect.x, y: rect.y, w: rect.w, h }
 
-      computeRect(
-        ctx,
-        slice,
-        pixelW,
-        pixelH,
-        nextView,
-        nextFractalType,
-        nextColorScheme,
-        nextJuliaC,
-      )
+      computeRect(ctx, slice, pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC)
 
       rect.y += h
       rect.h -= h
@@ -494,7 +446,6 @@ function App() {
     nextJuliaC,
     { onDone = null } = {},
   ) => {
-    // Any pan update should cancel in-flight compute for stale geometry.
     renderIdRef.current += 1
 
     const cache = cacheRef.current
@@ -512,33 +463,22 @@ function App() {
     }
 
     const scale = scaleFor(nextView.zoom, pixelW, pixelH)
+    const dx = Math.round((cache.centerX - nextView.centerX) / scale)
+    const dy = Math.round((cache.centerY - nextView.centerY) / scale)
 
-    // Translate cache content by the pixel shift corresponding to center movement.
-    const dxFloat = (cache.centerX - nextView.centerX) / scale
-    const dyFloat = (cache.centerY - nextView.centerY) / scale
-
-    const dx = Math.round(dxFloat)
-    const dy = Math.round(dyFloat)
-
-    // If movement is too large, just reset (faster than shifting huge gaps)
     if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
       cache.centerX = nextView.centerX
       cache.centerY = nextView.centerY
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
-        onDone,
-      })
+      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, { onDone })
       return { usedCache: true }
     }
 
     if (dx === 0 && dy === 0) {
-      // No meaningful pan in pixel space.
       return { usedCache: true }
     }
 
     const ctx = cache.ctx
     ctx.imageSmoothingEnabled = false
-
-    // Shift existing cache content
     ctx.save()
     ctx.globalCompositeOperation = 'copy'
     ctx.drawImage(cache.canvas, dx, dy)
@@ -571,11 +511,8 @@ function App() {
       cache.smoothBuffer = shifted
     }
 
-    // Clear newly exposed regions and compute them.
-    // Exposed vertical strips
     const rects = []
 
-    // For active drag, avoid visible black gaps by stretching edge pixels into exposed areas.
     if (dragRef.current.active) {
       if (dx > 0) {
         ctx.drawImage(cache.canvas, dx, 0, 1, cache.height, 0, 0, dx, cache.height)
@@ -610,40 +547,25 @@ function App() {
       }
     }
 
-    if (dx > 0) {
-      // moved content right; need new pixels on left
-      rects.push({ x: 0, y: 0, w: dx, h: cache.height })
-    } else if (dx < 0) {
-      // moved content left; need new pixels on right
-      rects.push({ x: cache.width + dx, y: 0, w: -dx, h: cache.height })
-    }
+    if (dx > 0) rects.push({ x: 0, y: 0, w: dx, h: cache.height })
+    else if (dx < 0) rects.push({ x: cache.width + dx, y: 0, w: -dx, h: cache.height })
 
-    if (dy > 0) {
-      // moved content down; need new pixels at top
-      rects.push({ x: 0, y: 0, w: cache.width, h: dy })
-    } else if (dy < 0) {
-      // moved content up; need new pixels at bottom
-      rects.push({ x: 0, y: cache.height + dy, w: cache.width, h: -dy })
-    }
+    if (dy > 0) rects.push({ x: 0, y: 0, w: cache.width, h: dy })
+    else if (dy < 0) rects.push({ x: 0, y: cache.height + dy, w: cache.width, h: -dy })
 
-    // Update cache center to the new view center.
     cache.centerX = nextView.centerX
     cache.centerY = nextView.centerY
 
-    // Clamp + compute exposed rects
     const clamped = rects
-      .map((r) => ({
-        x: Math.max(0, Math.floor(r.x)),
-        y: Math.max(0, Math.floor(r.y)),
-        w: Math.max(0, Math.floor(r.w)),
-        h: Math.max(0, Math.floor(r.h)),
+      .map((rect) => ({
+        x: Math.max(0, Math.floor(rect.x)),
+        y: Math.max(0, Math.floor(rect.y)),
+        w: Math.max(0, Math.floor(rect.w)),
+        h: Math.max(0, Math.floor(rect.h)),
       }))
-      .filter((r) => r.w > 0 && r.h > 0)
+      .filter((rect) => rect.w > 0 && rect.h > 0)
 
     if (clamped.length) {
-      // Always render exposed strips, even during active drag.
-      // While interacting, nextView carries preview settings (low iter),
-      // then we promote to full quality after idle timeout.
       fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
         priorityRects: clamped,
         onDone,
@@ -657,106 +579,120 @@ function App() {
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
-    if (!size.width || !size.height) return
+    if (!canvas || !size.width || !size.height) return
 
-    const drawViewportFromCache = (renderW, renderH, fullW, fullH) => {
+    const dpr = size.dpr
+    const pixelW = Math.floor(size.width * dpr)
+    const pixelH = Math.floor(size.height * dpr)
+    if (canvas.width !== pixelW) canvas.width = pixelW
+    if (canvas.height !== pixelH) canvas.height = pixelH
+
+    const drawViewportFromCache = () => {
       const ctx = canvas.getContext('2d', { alpha: false })
       if (!ctx) return
-      ctx.imageSmoothingEnabled = internalScale >= 0.99 ? false : true
+      ctx.imageSmoothingEnabled = false
 
       const cache = cacheRef.current
       if (!cache.canvas) return
 
-      const srcX = Math.floor((cache.width - renderW) / 2)
-      const srcY = Math.floor((cache.height - renderH) / 2)
-      ctx.clearRect(0, 0, fullW, fullH)
-      ctx.drawImage(cache.canvas, srcX, srcY, renderW, renderH, 0, 0, fullW, fullH)
-
-      setDisplayedScale(renderW / fullW)
-      setDisplayedMaxIter(renderView.maxIter)
+      const srcX = Math.floor((cache.width - pixelW) / 2)
+      const srcY = Math.floor((cache.height - pixelH) / 2)
+      ctx.clearRect(0, 0, pixelW, pixelH)
+      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
     }
 
-    const dpr = size.dpr
-    const fullPixelW = Math.floor(size.width * dpr)
-    const fullPixelH = Math.floor(size.height * dpr)
-    const renderW = Math.max(1, Math.floor(fullPixelW * internalScale))
-    const renderH = Math.max(1, Math.floor(fullPixelH * internalScale))
-
-    if (canvas.width !== fullPixelW) canvas.width = fullPixelW
-    if (canvas.height !== fullPixelH) canvas.height = fullPixelH
-
-    const ctx = canvas.getContext('2d', { alpha: false })
-    if (!ctx) return
-    ctx.imageSmoothingEnabled = internalScale >= 0.99 ? false : true
-
-    const renderView = { ...view, maxIter: renderMaxIter }
-
-    // Ensure pan-cache exists and is compatible.
     const { reset, recolorOnly } = ensureCache(
-      renderW,
-      renderH,
-      dpr * internalScale,
-      renderView,
+      pixelW,
+      pixelH,
+      dpr,
+      view,
       fractalType,
       colorScheme,
       juliaC,
-      !dragRef.current.active,
     )
 
     if (reset) {
-      // Fresh cache: compute entire cache (in chunks)
-      fillCache(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
-        onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
-      })
+      fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, { onDone: drawViewportFromCache })
     } else if (recolorOnly) {
-      // Palette change only: repaint from cached smooth data, no fractal recompute.
-      repaintEntireCache(colorScheme, renderView.maxIter)
-      drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH)
+      repaintEntireCache(colorScheme, view.maxIter)
+      drawViewportFromCache()
     } else {
-      // Same zoom/iter: try to update cache by shifting + computing only new strips
-      const { usedCache } = updateCacheForPan(
-        renderW,
-        renderH,
-        renderView,
-        fractalType,
-        colorScheme,
-        juliaC,
-        {
-          onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
-        },
-      )
-
-      // If cache can't be reused (e.g. preview/full iter switch), do a fresh render.
+      const { usedCache } = updateCacheForPan(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
+        onDone: drawViewportFromCache,
+      })
       if (!usedCache) {
-        fillCache(renderW, renderH, renderView, fractalType, colorScheme, juliaC, {
-          onDone: () => drawViewportFromCache(renderW, renderH, fullPixelW, fullPixelH),
-        })
+        fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, { onDone: drawViewportFromCache })
       }
     }
+  }, [size, view, fractalType, colorScheme, juliaC])
 
-  }, [size, view, fractalType, colorScheme, juliaC, internalScale, renderScale, renderMaxIter])
+  useEffect(() => {
+    const canvas = minimapRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = Math.max(1, Math.floor(rect.width * dpr))
+    const pixelH = Math.max(1, Math.floor(rect.height * dpr))
+    if (canvas.width !== pixelW) canvas.width = pixelW
+    if (canvas.height !== pixelH) canvas.height = pixelH
+
+    const ctx = canvas.getContext('2d', { alpha: false })
+    if (!ctx) return
+
+    const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
+    const minimapView = {
+      centerX: base.centerX,
+      centerY: base.centerY,
+      zoom: Math.max(0.22, base.zoom * 0.35),
+      maxIter: MINIMAP_MAX_ITER,
+    }
+
+    renderFractalImageData(ctx, pixelW, pixelH, minimapView, fractalType, colorScheme, juliaC)
+
+    const mainPixelW = Math.max(1, size.width * dpr)
+    const mainPixelH = Math.max(1, size.height * dpr)
+    const mainScale = scaleFor(view.zoom, mainPixelW, mainPixelH)
+    const mainHalfW = (mainPixelW / 2) * mainScale
+    const mainHalfH = (mainPixelH / 2) * mainScale
+
+    const topLeft = complexToPixel(
+      view.centerX - mainHalfW,
+      view.centerY - mainHalfH,
+      minimapView,
+      pixelW,
+      pixelH,
+    )
+    const bottomRight = complexToPixel(
+      view.centerX + mainHalfW,
+      view.centerY + mainHalfH,
+      minimapView,
+      pixelW,
+      pixelH,
+    )
+
+    ctx.save()
+    ctx.strokeStyle = '#f3f7ff'
+    ctx.lineWidth = Math.max(2, dpr * 1.5)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)'
+    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
+    ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
+    ctx.restore()
+  }, [fractalType, colorScheme, juliaC, view, size])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
     const pixelH = rect.height * (window.devicePixelRatio || 1)
-    const scale = scaleFor(viewLike.zoom, pixelW, pixelH)
-    return {
-      x: (x - rect.width / 2) * scale + viewLike.centerX,
-      y: (y - rect.height / 2) * scale + viewLike.centerY,
-    }
+    return pixelToComplex(x * (window.devicePixelRatio || 1), y * (window.devicePixelRatio || 1), viewLike, pixelW, pixelH)
   }
 
   const updateCenterFromScreen = (rect, x, y, zoomFactor) => {
-    // rect is CSS pixels
     const dpr = window.devicePixelRatio || 1
     const pixelW = rect.width * dpr
     const pixelH = rect.height * dpr
-
-    const scale = scaleFor(view.zoom, pixelW, pixelH)
     const anchor = {
-      x: (x - rect.width / 2) * scale + view.centerX,
-      y: (y - rect.height / 2) * scale + view.centerY,
+      x: (x - rect.width / 2) * scaleFor(view.zoom, pixelW, pixelH) + view.centerX,
+      y: (y - rect.height / 2) * scaleFor(view.zoom, pixelW, pixelH) + view.centerY,
     }
 
     setView((prev) => {
@@ -775,10 +711,7 @@ function App() {
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
-    const x = event.clientX - rect.left
-    const y = event.clientY - rect.top
-
-    updateCenterFromScreen(rect, x, y, zoomFactor)
+    updateCenterFromScreen(rect, event.clientX - rect.left, event.clientY - rect.top, zoomFactor)
   }
 
   const beginPinch = (rect, p1, p2) => {
@@ -800,10 +733,8 @@ function App() {
   }
 
   const handlePointerDown = (event) => {
-    noteInteraction('pan')
     const canvas = canvasRef.current
     if (!canvas) return
-
     if (event.pointerType === 'mouse' && event.button !== 0) return
 
     canvas.setPointerCapture(event.pointerId)
@@ -812,16 +743,16 @@ function App() {
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
 
-    const g = gestureRef.current
-    g.pointers.set(event.pointerId, { x, y })
+    const gesture = gestureRef.current
+    gesture.pointers.set(event.pointerId, { x, y })
 
-    if (g.pointers.size === 2) {
-      const [pp1, pp2] = Array.from(g.pointers.values())
-      beginPinch(rect, pp1, pp2)
+    if (gesture.pointers.size === 2) {
+      const [p1, p2] = Array.from(gesture.pointers.values())
+      beginPinch(rect, p1, p2)
       return
     }
 
-    g.mode = 'pan'
+    gesture.mode = 'pan'
     dragRef.current = {
       active: true,
       pointerId: event.pointerId,
@@ -836,49 +767,41 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
-    noteInteraction('pan')
     const canvas = canvasRef.current
     if (!canvas) return
+
     const rect = canvas.getBoundingClientRect()
     const x = event.clientX - rect.left
     const y = event.clientY - rect.top
 
-    const g = gestureRef.current
-    if (g.pointers.has(event.pointerId)) {
-      g.pointers.set(event.pointerId, { x, y })
+    const gesture = gestureRef.current
+    if (gesture.pointers.has(event.pointerId)) {
+      gesture.pointers.set(event.pointerId, { x, y })
     }
 
-    if (g.mode === 'pinch' && g.pointers.size >= 2) {
-      noteInteraction('zoom')
-      const [p1, p2] = Array.from(g.pointers.values())
+    if (gesture.mode === 'pinch' && gesture.pointers.size >= 2) {
+      const [p1, p2] = Array.from(gesture.pointers.values())
       const dx = p2.x - p1.x
       const dy = p2.y - p1.y
       const dist = Math.hypot(dx, dy) || 1
-
       const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
 
-      const distDelta = Math.abs(dist - (g.startDist || 0))
-      const midDelta = Math.hypot(mid.x - g.startMid.x, mid.y - g.startMid.y)
-      if (distDelta > 8 || midDelta > 8) g.pinchMoved = true
+      const distDelta = Math.abs(dist - (gesture.startDist || 0))
+      const midDelta = Math.hypot(mid.x - gesture.startMid.x, mid.y - gesture.startMid.y)
+      if (distDelta > 8 || midDelta > 8) gesture.pinchMoved = true
 
-      const ratio = dist / (g.startDist || 1)
-      const nextZoom = quantizeZoom(Math.max(0.05, g.startView.zoom * ratio))
-
-      // Reset cache on zoom changes automatically (handled by ensureCache).
+      const ratio = dist / (gesture.startDist || 1)
+      const nextZoom = quantizeZoom(Math.max(0.05, gesture.startView.zoom * ratio))
       const dpr = window.devicePixelRatio || 1
       const pixelW = rect.width * dpr
       const pixelH = rect.height * dpr
       const nextScale = scaleFor(nextZoom, pixelW, pixelH)
 
-      const anchor = g.anchorComplex
-      const nextCenterX = anchor.x - (mid.x - rect.width / 2) * nextScale
-      const nextCenterY = anchor.y - (mid.y - rect.height / 2) * nextScale
-
       setView((prev) => ({
         ...prev,
         zoom: nextZoom,
-        centerX: nextCenterX,
-        centerY: nextCenterY,
+        centerX: gesture.anchorComplex.x - (mid.x - rect.width / 2) * nextScale,
+        centerY: gesture.anchorComplex.y - (mid.y - rect.height / 2) * nextScale,
       }))
       return
     }
@@ -888,9 +811,7 @@ function App() {
 
     const dx = (event.clientX - drag.startX) * PAN_SWIPE_MULTIPLIER
     const dy = (event.clientY - drag.startY) * PAN_SWIPE_MULTIPLIER
-    if (!drag.moved && Math.hypot(dx, dy) > 3) {
-      drag.moved = true
-    }
+    if (!drag.moved && Math.hypot(dx, dy) > 3) drag.moved = true
     if (!drag.moved) return
 
     const dpr = window.devicePixelRatio || 1
@@ -906,44 +827,37 @@ function App() {
   }
 
   const finishPointer = (event) => {
-    noteInteraction('pan')
     const canvas = canvasRef.current
-    const g = gestureRef.current
-
-    // Update this pointer position one last time (important for tap gestures).
+    const gesture = gestureRef.current
     const rect = canvas?.getBoundingClientRect()
-    if (rect && g.pointers.has(event.pointerId)) {
-      g.pointers.set(event.pointerId, {
+
+    if (rect && gesture.pointers.has(event.pointerId)) {
+      gesture.pointers.set(event.pointerId, {
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       })
     }
 
-    // Snapshot before removing the pointer so we can detect 2-finger tap.
-    const pointersBefore = Array.from(g.pointers.values())
-    const wasPinch = g.mode === 'pinch'
-    const wasTwoFingers = g.pointers.size === 2
-    const pinchMoved = g.pinchMoved
-    const pinchDurationMs = performance.now() - (g.pinchStartedAt || 0)
+    const pointersBefore = Array.from(gesture.pointers.values())
+    const wasPinch = gesture.mode === 'pinch'
+    const wasTwoFingers = gesture.pointers.size === 2
+    const pinchMoved = gesture.pinchMoved
+    const pinchDurationMs = performance.now() - (gesture.pinchStartedAt || 0)
 
     if (canvas?.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId)
     }
-    g.pointers.delete(event.pointerId)
+    gesture.pointers.delete(event.pointerId)
 
-    // Two-finger tap to zoom out.
     if (wasPinch && wasTwoFingers && !pinchMoved && pinchDurationMs < 280 && rect) {
-      noteInteraction('zoom')
       const p1 = pointersBefore[0]
       const p2 = pointersBefore[1]
-      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
-      updateCenterFromScreen(rect, mid.x, mid.y, 1 / ZOOM_STEP_FACTOR)
+      updateCenterFromScreen(rect, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2, 1 / ZOOM_STEP_FACTOR)
     }
 
-    // If we were pinching and one finger lifted, end pinch.
     if (wasPinch) {
-      if (g.pointers.size >= 2) return
-      g.mode = g.pointers.size === 1 ? 'pan' : 'none'
+      if (gesture.pointers.size >= 2) return
+      gesture.mode = gesture.pointers.size === 1 ? 'pan' : 'none'
       dragRef.current.active = false
       setIsDragging(false)
       return
@@ -951,7 +865,7 @@ function App() {
 
     const drag = dragRef.current
     if (!drag.active || drag.pointerId !== event.pointerId) {
-      if (g.pointers.size === 0) setIsDragging(false)
+      if (gesture.pointers.size === 0) setIsDragging(false)
       return
     }
 
@@ -967,11 +881,10 @@ function App() {
       startZoom: view.zoom,
     }
 
-    g.mode = g.pointers.size > 0 ? 'pan' : 'none'
-    setIsDragging(g.pointers.size > 0)
+    gesture.mode = gesture.pointers.size > 0 ? 'pan' : 'none'
+    setIsDragging(gesture.pointers.size > 0)
 
     if (!didDrag) {
-      noteInteraction('zoom')
       const zoomFactor =
         event.pointerType === 'mouse' && event.shiftKey ? 1 / ZOOM_STEP_FACTOR : ZOOM_STEP_FACTOR
       updateCenterFromPointer(event, zoomFactor)
@@ -979,39 +892,27 @@ function App() {
   }
 
   const handleCanvasContextMenu = (event) => {
-    noteInteraction('zoom')
     event.preventDefault()
     updateCenterFromPointer(event, 1 / ZOOM_STEP_FACTOR)
   }
 
   const handleWheel = (event) => {
-    noteInteraction('zoom')
-    // Zoom towards cursor position (desktop mouse wheel / trackpad).
-    // Prevent page scroll while interacting with the canvas.
     event.preventDefault()
-
-    // Normalize delta across browsers/devices.
     const deltaModeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
     const delta = event.deltaY * deltaModeScale
-
-    // Exponential zoom feels natural and works well for trackpads.
-    const ZOOM_SENSITIVITY = 0.0015
-    let zoomFactor = Math.exp(-delta * ZOOM_SENSITIVITY)
-
-    // Clamp per-event zoom to avoid wild jumps.
+    let zoomFactor = Math.exp(-delta * 0.0015)
     zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
-
     updateCenterFromPointer(event, zoomFactor)
   }
 
   const zoomIn = () => {
-    noteInteraction('zoom')
     setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * ZOOM_STEP_FACTOR) }))
   }
+
   const zoomOut = () => {
-    noteInteraction('zoom')
     setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / ZOOM_STEP_FACTOR) }))
   }
+
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
     setView((prev) => ({
@@ -1022,189 +923,222 @@ function App() {
     }))
   }
 
-  const tipText = useMemo(() => {
-    return 'Pinch to zoom. Two-finger tap to zoom out. Drag to move.'
-  }, [])
-
-  const previewActive =
-    displayedScale < internalScale - 0.001 || displayedMaxIter < view.maxIter
-
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
     const base = FRACTALS[nextType]?.defaultView || FRACTALS.mandelbrot.defaultView
     setView((prev) => ({ ...prev, ...base, zoom: quantizeZoom(base.zoom) }))
   }
 
+  const handleMinimapPointer = (event) => {
+    const canvas = minimapRef.current
+    if (!canvas) return
+
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = Math.max(1, Math.floor(rect.width * dpr))
+    const pixelH = Math.max(1, Math.floor(rect.height * dpr))
+    const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
+    const minimapView = {
+      centerX: base.centerX,
+      centerY: base.centerY,
+      zoom: Math.max(0.22, base.zoom * 0.35),
+      maxIter: MINIMAP_MAX_ITER,
+    }
+
+    const target = pixelToComplex(
+      (event.clientX - rect.left) * dpr,
+      (event.clientY - rect.top) * dpr,
+      minimapView,
+      pixelW,
+      pixelH,
+    )
+
+    setView((prev) => ({
+      ...prev,
+      centerX: target.x,
+      centerY: target.y,
+    }))
+  }
+
+  const tipText = 'Click or drag in the minimap to recenter. Use the main canvas to inspect.'
+
   return (
     <div className="page">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">Escape-Time Explorer</p>
-          <p className="lede">
-            Tap to zoom in, drag to pan, and pinch to zoom on mobile. Two-finger tap zooms out. On
-            desktop: click to zoom, Shift/right-click to zoom out.
-          </p>
-        </div>
-        <div className="controls">
-          <label className="picker">
-            <span>Fractal</span>
-            <select
-              value={fractalType}
-              onChange={(event) => handleFractalChange(event.target.value)}
-              aria-label="Fractal type"
-            >
-              {Object.entries(FRACTALS).map(([key, spec]) => (
-                <option key={key} value={key}>
-                  {spec.label}
-                </option>
-              ))}
-            </select>
-          </label>
+      <div className="layout">
+        <aside className="sidebar">
+          <div className="sidebar-block">
+            <p className="eyebrow">Escape-Time Explorer</p>
+            <p className="lede">
+              The main view now renders at one quality level. Pan-cache remains for same-zoom
+              movement, and the minimap handles larger jumps across the set.
+            </p>
+          </div>
 
-          <label className="picker">
-            <span>Colors</span>
-            <select
-              value={colorScheme}
-              onChange={(event) => setColorScheme(event.target.value)}
-              aria-label="Color scheme"
-            >
-              {Object.entries(COLOR_SCHEMES).map(([key, spec]) => (
-                <option key={key} value={key}>
-                  {spec.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="sidebar-block controls">
+            <label className="picker">
+              <span>Fractal</span>
+              <select
+                value={fractalType}
+                onChange={(event) => handleFractalChange(event.target.value)}
+                aria-label="Fractal type"
+              >
+                {Object.entries(FRACTALS).map(([key, spec]) => (
+                  <option key={key} value={key}>
+                    {spec.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label className="picker">
-            <span>Internal resolution</span>
-            <select
-              value={String(internalScale)}
-              onChange={(event) => setInternalScale(Number(event.target.value))}
-              aria-label="Internal resolution"
-            >
-              <option value="1">100%</option>
-              <option value="0.75">75%</option>
-              <option value="0.5">50%</option>
-              <option value="0.25">25%</option>
-            </select>
-          </label>
+            <label className="picker">
+              <span>Colors</span>
+              <select
+                value={colorScheme}
+                onChange={(event) => setColorScheme(event.target.value)}
+                aria-label="Color scheme"
+              >
+                {Object.entries(COLOR_SCHEMES).map(([key, spec]) => (
+                  <option key={key} value={key}>
+                    {spec.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={adaptiveQuality}
-              onChange={(event) => setAdaptiveQuality(event.target.checked)}
-            />
-            <span>Adaptive quality while moving</span>
-          </label>
+            {fractalType === 'julia' && (
+              <div className="julia-controls">
+                <label className="picker small">
+                  <span>Julia c (real)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={juliaC.re}
+                    onChange={(event) =>
+                      setJuliaC((prev) => ({ ...prev, re: Number(event.target.value) || 0 }))
+                    }
+                  />
+                </label>
+                <label className="picker small">
+                  <span>Julia c (imag)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={juliaC.im}
+                    onChange={(event) =>
+                      setJuliaC((prev) => ({ ...prev, im: Number(event.target.value) || 0 }))
+                    }
+                  />
+                </label>
+              </div>
+            )}
 
-          {fractalType === 'julia' && (
-            <div className="julia-controls">
-              <label className="picker small">
-                <span>Julia c (real)</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={juliaC.re}
-                  onChange={(event) =>
-                    setJuliaC((prev) => ({ ...prev, re: Number(event.target.value) || 0 }))
-                  }
-                />
-              </label>
-              <label className="picker small">
-                <span>Julia c (imag)</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={juliaC.im}
-                  onChange={(event) =>
-                    setJuliaC((prev) => ({ ...prev, im: Number(event.target.value) || 0 }))
-                  }
-                />
-              </label>
+            <div className="controls-row">
+              <button className="btn" onClick={zoomIn}>
+                Zoom In
+              </button>
+              <button className="btn" onClick={zoomOut}>
+                Zoom Out
+              </button>
+              <button className="btn ghost" onClick={reset}>
+                Reset
+              </button>
             </div>
-          )}
 
-          <div className="controls-row">
-            <button className="btn" onClick={zoomIn}>
-              Zoom In
-            </button>
-            <button className="btn" onClick={zoomOut}>
-              Zoom Out
-            </button>
-            <button className="btn ghost" onClick={reset}>
-              Reset
-            </button>
+            <label className="slider">
+              <span>Iterations</span>
+              <input
+                type="range"
+                min="100"
+                max="2000"
+                step="50"
+                value={view.maxIter}
+                onChange={(event) =>
+                  setView((prev) => ({
+                    ...prev,
+                    maxIter: Number(event.target.value),
+                  }))
+                }
+              />
+              <span className="value">{view.maxIter}</span>
+            </label>
           </div>
-          <label className="slider">
-            <span>Iterations</span>
-            <input
-              type="range"
-              min="100"
-              max="2000"
-              step="50"
-              value={view.maxIter}
-              onChange={(event) =>
-                setView((prev) => ({
-                  ...prev,
-                  maxIter: Number(event.target.value),
-                }))
-              }
+
+          <div className="sidebar-block minimap-panel">
+            <div className="panel-head">
+              <span>Navigator</span>
+              <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
+            </div>
+            <canvas
+              ref={minimapRef}
+              className="minimap"
+              onPointerDown={(event) => {
+                event.currentTarget.setPointerCapture(event.pointerId)
+                handleMinimapPointer(event)
+              }}
+              onPointerMove={(event) => {
+                if (event.buttons === 1) handleMinimapPointer(event)
+              }}
+              onPointerUp={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                  event.currentTarget.releasePointerCapture(event.pointerId)
+                }
+              }}
+              role="img"
+              aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} minimap`}
             />
-            <span className="value">{view.maxIter}</span>
-          </label>
-        </div>
-      </header>
+            <p className="panel-note">{tipText}</p>
+          </div>
+        </aside>
 
-      <section className="canvas-shell">
-        <div className="canvas-frame">
-          <canvas
-            ref={canvasRef}
-            className={isDragging ? 'dragging' : ''}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={finishPointer}
-            onPointerCancel={finishPointer}
-            onContextMenu={handleCanvasContextMenu}
-            onWheel={handleWheel}
-            role="img"
-            aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} set`}
-          />
-        </div>
-        <div className="meta">
-          <div>
-            <span>Fractal</span>
-            <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
+        <section className="canvas-shell">
+          <div className="canvas-frame">
+            <canvas
+              ref={canvasRef}
+              className={isDragging ? 'dragging' : ''}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={finishPointer}
+              onPointerCancel={finishPointer}
+              onContextMenu={handleCanvasContextMenu}
+              onWheel={handleWheel}
+              role="img"
+              aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} set`}
+            />
           </div>
-          <div>
-            <span>Colors</span>
-            <strong>{COLOR_SCHEMES[colorScheme]?.label || 'Aurora'}</strong>
+          <div className="meta">
+            <div>
+              <span>Fractal</span>
+              <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
+            </div>
+            <div>
+              <span>Colors</span>
+              <strong>{COLOR_SCHEMES[colorScheme]?.label || 'Aurora'}</strong>
+            </div>
+            <div>
+              <span>Center</span>
+              <strong>
+                {view.centerX.toFixed(2)}, {view.centerY.toFixed(2)}
+              </strong>
+            </div>
+            <div>
+              <span>Zoom</span>
+              <strong>{view.zoom.toFixed(2)}x</strong>
+            </div>
+            <div>
+              <span>Iterations</span>
+              <strong>{view.maxIter}</strong>
+            </div>
+            <div>
+              <span>Navigation</span>
+              <strong>Minimap + drag</strong>
+            </div>
+            <div>
+              <span>Tip</span>
+              <strong>{tipText}</strong>
+            </div>
           </div>
-          <div>
-            <span>Center</span>
-            <strong>
-              {view.centerX.toFixed(2)}, {view.centerY.toFixed(2)}
-            </strong>
-          </div>
-          <div>
-            <span>Zoom</span>
-            <strong>{view.zoom.toFixed(2)}x</strong>
-          </div>
-          <div>
-            <span>Render</span>
-            <strong>{Math.round(displayedScale * 100)}%</strong>
-          </div>
-          <div>
-            <span>Quality</span>
-            <strong>{previewActive ? 'Preview' : 'Full'}</strong>
-          </div>
-          <div>
-            <span>Tip</span>
-            <strong>{tipText}</strong>
-          </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   )
 }
