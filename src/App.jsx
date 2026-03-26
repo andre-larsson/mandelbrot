@@ -49,6 +49,8 @@ const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 const MINIMAP_MAX_ITER = 180
 const DEFAULT_MINIMAP_ZOOM = 1
+const MINIMAP_ASPECT_WIDTH = 4
+const MINIMAP_ASPECT_HEIGHT = 3
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -207,7 +209,15 @@ function getNavigatorBounds(fractalType) {
   return FRACTALS[fractalType]?.navigatorBounds || FRACTALS.mandelbrot.navigatorBounds
 }
 
-function getMinimapView(fractalType, zoomFactor, maxIter, pixelW, pixelH) {
+function getDefaultMinimapCenter(fractalType) {
+  const bounds = getNavigatorBounds(fractalType)
+  return {
+    centerX: (bounds.minX + bounds.maxX) / 2,
+    centerY: (bounds.minY + bounds.maxY) / 2,
+  }
+}
+
+function getMinimapView(fractalType, center, zoomFactor, maxIter, pixelW, pixelH) {
   const bounds = getNavigatorBounds(fractalType)
   const boundsWidth = bounds.maxX - bounds.minX
   const boundsHeight = bounds.maxY - bounds.minY
@@ -215,8 +225,8 @@ function getMinimapView(fractalType, zoomFactor, maxIter, pixelW, pixelH) {
   const baseZoom = 4 / (scale * Math.min(pixelW, pixelH))
 
   return {
-    centerX: (bounds.minX + bounds.maxX) / 2,
-    centerY: (bounds.minY + bounds.maxY) / 2,
+    centerX: center.centerX,
+    centerY: center.centerY,
     zoom: Math.max(0.22, baseZoom * zoomFactor),
     maxIter,
   }
@@ -238,9 +248,46 @@ function roundCoord(value) {
   return value.toFixed(2)
 }
 
+function getViewportRect(mainView, minimapView, mainPixelW, mainPixelH, minimapPixelW, minimapPixelH) {
+  const mainBounds = getViewBounds(mainView, mainPixelW, mainPixelH)
+  const topLeft = complexToPixel(
+    mainBounds.minX,
+    mainBounds.minY,
+    minimapView,
+    minimapPixelW,
+    minimapPixelH,
+  )
+  const bottomRight = complexToPixel(
+    mainBounds.maxX,
+    mainBounds.maxY,
+    minimapView,
+    minimapPixelW,
+    minimapPixelH,
+  )
+
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    w: bottomRight.x - topLeft.x,
+    h: bottomRight.y - topLeft.y,
+  }
+}
+
 function App() {
   const canvasRef = useRef(null)
   const minimapRef = useRef(null)
+  const minimapDragRef = useRef({
+    active: false,
+    pointerId: null,
+    mode: 'none',
+    moved: false,
+    startX: 0,
+    startY: 0,
+    startCenterX: 0,
+    startCenterY: 0,
+    mainOffsetX: 0,
+    mainOffsetY: 0,
+  })
 
   const [fractalType, setFractalType] = useState('mandelbrot')
   const [colorScheme, setColorScheme] = useState('aurora')
@@ -249,6 +296,7 @@ function App() {
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [minimapZoom, setMinimapZoom] = useState(DEFAULT_MINIMAP_ZOOM)
   const [minimapIter, setMinimapIter] = useState(MINIMAP_MAX_ITER)
+  const [minimapCenter, setMinimapCenter] = useState(getDefaultMinimapCenter('mandelbrot'))
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -269,6 +317,56 @@ function App() {
     observer.observe(parent)
     return () => observer.disconnect()
   }, [])
+
+  const getMinimapViewForBounds = () =>
+    getMinimapView(
+      fractalType,
+      minimapCenter,
+      minimapZoom,
+      minimapIter,
+      MINIMAP_ASPECT_WIDTH,
+      MINIMAP_ASPECT_HEIGHT,
+    )
+
+  const constrainMainView = (nextView, minimapView = getMinimapViewForBounds()) => {
+    const mainPixelW = Math.max(1, Math.floor(size.width * size.dpr) || 1)
+    const mainPixelH = Math.max(1, Math.floor(size.height * size.dpr) || 1)
+    const allowedBounds = getViewBounds(
+      minimapView,
+      MINIMAP_ASPECT_WIDTH,
+      MINIMAP_ASPECT_HEIGHT,
+    )
+    const allowedWidth = allowedBounds.maxX - allowedBounds.minX
+    const allowedHeight = allowedBounds.maxY - allowedBounds.minY
+    const requiredScale = Math.max(allowedWidth / mainPixelW, allowedHeight / mainPixelH)
+    const minZoom = 4 / (requiredScale * Math.min(mainPixelW, mainPixelH))
+    const zoom = Math.max(nextView.zoom, minZoom)
+    const scale = scaleFor(zoom, mainPixelW, mainPixelH)
+    const halfW = (mainPixelW / 2) * scale
+    const halfH = (mainPixelH / 2) * scale
+
+    const next = { ...nextView, zoom }
+
+    if (halfW * 2 >= allowedWidth) {
+      next.centerX = (allowedBounds.minX + allowedBounds.maxX) / 2
+    } else {
+      next.centerX = Math.min(
+        allowedBounds.maxX - halfW,
+        Math.max(allowedBounds.minX + halfW, next.centerX),
+      )
+    }
+
+    if (halfH * 2 >= allowedHeight) {
+      next.centerY = (allowedBounds.minY + allowedBounds.maxY) / 2
+    } else {
+      next.centerY = Math.min(
+        allowedBounds.maxY - halfH,
+        Math.max(allowedBounds.minY + halfH, next.centerY),
+      )
+    }
+
+    return next
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -299,39 +397,22 @@ function App() {
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
 
-    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter, pixelW, pixelH)
+    const minimapView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
 
     renderFractalImageData(ctx, pixelW, pixelH, minimapView, fractalType, colorScheme, juliaC)
 
     const mainPixelW = Math.max(1, size.width * dpr)
     const mainPixelH = Math.max(1, size.height * dpr)
-    const mainScale = scaleFor(view.zoom, mainPixelW, mainPixelH)
-    const mainHalfW = (mainPixelW / 2) * mainScale
-    const mainHalfH = (mainPixelH / 2) * mainScale
-
-    const topLeft = complexToPixel(
-      view.centerX - mainHalfW,
-      view.centerY - mainHalfH,
-      minimapView,
-      pixelW,
-      pixelH,
-    )
-    const bottomRight = complexToPixel(
-      view.centerX + mainHalfW,
-      view.centerY + mainHalfH,
-      minimapView,
-      pixelW,
-      pixelH,
-    )
+    const viewportRect = getViewportRect(view, minimapView, mainPixelW, mainPixelH, pixelW, pixelH)
 
     ctx.save()
     ctx.strokeStyle = '#f3f7ff'
     ctx.lineWidth = Math.max(2, dpr * 1.5)
     ctx.fillStyle = 'rgba(255, 255, 255, 0.08)'
-    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
-    ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
+    ctx.strokeRect(viewportRect.x, viewportRect.y, viewportRect.w, viewportRect.h)
+    ctx.fillRect(viewportRect.x, viewportRect.y, viewportRect.w, viewportRect.h)
     ctx.restore()
-  }, [fractalType, colorScheme, juliaC, view, size, minimapZoom, minimapIter])
+  }, [fractalType, colorScheme, juliaC, view, size, minimapCenter, minimapZoom, minimapIter])
 
   const updateCenterFromScreen = (rect, x, y, zoomFactor) => {
     const dpr = window.devicePixelRatio || 1
@@ -345,12 +426,12 @@ function App() {
     setView((prev) => {
       const nextZoom = quantizeZoom(prev.zoom * zoomFactor)
       const nextScale = scaleFor(nextZoom, pixelW, pixelH)
-      return {
+      return constrainMainView({
         ...prev,
         zoom: nextZoom,
         centerX: anchor.x - (x - rect.width / 2) * nextScale,
         centerY: anchor.y - (y - rect.height / 2) * nextScale,
-      }
+      })
     })
   }
 
@@ -371,17 +452,20 @@ function App() {
   }
 
   const zoomIn = () => {
-    setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom * ZOOM_STEP_FACTOR) }))
+    setView((prev) =>
+      constrainMainView({ ...prev, zoom: quantizeZoom(prev.zoom * ZOOM_STEP_FACTOR) }),
+    )
   }
 
   const zoomOut = () => {
-    setView((prev) => ({ ...prev, zoom: quantizeZoom(prev.zoom / ZOOM_STEP_FACTOR) }))
+    setView((prev) =>
+      constrainMainView({ ...prev, zoom: quantizeZoom(prev.zoom / ZOOM_STEP_FACTOR) }),
+    )
   }
 
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    setView((prev) => ({
-      ...prev,
+    setView((prev) => constrainMainView({
       ...base,
       zoom: quantizeZoom(base.zoom),
       maxIter: DEFAULT_VIEW.maxIter,
@@ -391,10 +475,25 @@ function App() {
   const handleFractalChange = (nextType) => {
     setFractalType(nextType)
     const base = FRACTALS[nextType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    setView((prev) => ({ ...prev, ...base, zoom: quantizeZoom(base.zoom) }))
+    const nextCenter = getDefaultMinimapCenter(nextType)
+    setMinimapCenter(nextCenter)
+    setMinimapZoom(DEFAULT_MINIMAP_ZOOM)
+    setView((prev) =>
+      constrainMainView(
+        { ...prev, ...base, zoom: quantizeZoom(base.zoom) },
+        getMinimapView(
+          nextType,
+          nextCenter,
+          DEFAULT_MINIMAP_ZOOM,
+          minimapIter,
+          MINIMAP_ASPECT_WIDTH,
+          MINIMAP_ASPECT_HEIGHT,
+        ),
+      ),
+    )
   }
 
-  const handleMinimapPointer = (event) => {
+  const handleMinimapPointerDown = (event) => {
     const canvas = minimapRef.current
     if (!canvas) return
 
@@ -402,28 +501,166 @@ function App() {
     const dpr = window.devicePixelRatio || 1
     const pixelW = Math.max(1, Math.floor(rect.width * dpr))
     const pixelH = Math.max(1, Math.floor(rect.height * dpr))
-    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter, pixelW, pixelH)
+    const minimapView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
+    const mainPixelW = Math.max(1, size.width * dpr)
+    const mainPixelH = Math.max(1, size.height * dpr)
+    const px = (event.clientX - rect.left) * dpr
+    const py = (event.clientY - rect.top) * dpr
+    const viewportRect = getViewportRect(view, minimapView, mainPixelW, mainPixelH, pixelW, pixelH)
+    const pointerComplex = pixelToComplex(px, py, minimapView, pixelW, pixelH)
+    const insideViewport =
+      px >= viewportRect.x &&
+      px <= viewportRect.x + viewportRect.w &&
+      py >= viewportRect.y &&
+      py <= viewportRect.y + viewportRect.h
 
-    const target = pixelToComplex(
-      (event.clientX - rect.left) * dpr,
-      (event.clientY - rect.top) * dpr,
-      minimapView,
-      pixelW,
-      pixelH,
-    )
-
-    setView((prev) => ({
-      ...prev,
-      centerX: target.x,
-      centerY: target.y,
-    }))
+    canvas.setPointerCapture(event.pointerId)
+    minimapDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      mode: insideViewport ? 'moveViewport' : 'panMinimap',
+      moved: false,
+      startX: px,
+      startY: py,
+      startCenterX: minimapCenter.centerX,
+      startCenterY: minimapCenter.centerY,
+      mainOffsetX: pointerComplex.x - view.centerX,
+      mainOffsetY: pointerComplex.y - view.centerY,
+    }
   }
 
-  const tipText = 'Use the minimap to reposition. Use the mouse wheel over the main canvas to zoom.'
+  const handleMinimapPointerMove = (event) => {
+    const canvas = minimapRef.current
+    const drag = minimapDragRef.current
+    if (!canvas || !drag.active || drag.pointerId !== event.pointerId) return
+
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = Math.max(1, Math.floor(rect.width * dpr))
+    const pixelH = Math.max(1, Math.floor(rect.height * dpr))
+    const px = (event.clientX - rect.left) * dpr
+    const py = (event.clientY - rect.top) * dpr
+    const minimapView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
+
+    if (!drag.moved && Math.hypot(px - drag.startX, py - drag.startY) > 3) {
+      drag.moved = true
+    }
+
+    if (drag.mode === 'moveViewport') {
+      const pointerComplex = pixelToComplex(px, py, minimapView, pixelW, pixelH)
+      setView((prev) =>
+        constrainMainView({
+          ...prev,
+          centerX: pointerComplex.x - drag.mainOffsetX,
+          centerY: pointerComplex.y - drag.mainOffsetY,
+        }, minimapView),
+      )
+      return
+    }
+
+    const scale = scaleFor(minimapView.zoom, pixelW, pixelH)
+    setMinimapCenter({
+      centerX: drag.startCenterX - (px - drag.startX) * scale,
+      centerY: drag.startCenterY - (py - drag.startY) * scale,
+    })
+  }
+
+  const handleMinimapPointerUp = (event) => {
+    const canvas = minimapRef.current
+    const drag = minimapDragRef.current
+    if (!canvas || !drag.active || drag.pointerId !== event.pointerId) return
+
+    const rect = canvas.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = Math.max(1, Math.floor(rect.width * dpr))
+    const pixelH = Math.max(1, Math.floor(rect.height * dpr))
+    const minimapView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
+
+    if (!drag.moved && drag.mode === 'panMinimap') {
+      const target = pixelToComplex(
+        (event.clientX - rect.left) * dpr,
+        (event.clientY - rect.top) * dpr,
+        minimapView,
+        pixelW,
+        pixelH,
+      )
+
+      setView((prev) =>
+        constrainMainView({
+          ...prev,
+          centerX: target.x,
+          centerY: target.y,
+        }, minimapView),
+      )
+    }
+
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId)
+    }
+
+    minimapDragRef.current.active = false
+  }
+
+  const handleMinimapWheel = (event) => {
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const pixelW = Math.max(1, Math.floor(rect.width * dpr))
+    const pixelH = Math.max(1, Math.floor(rect.height * dpr))
+    const currentView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
+    const px = (event.clientX - rect.left) * dpr
+    const py = (event.clientY - rect.top) * dpr
+    const anchor = pixelToComplex(px, py, currentView, pixelW, pixelH)
+    const deltaModeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
+    const delta = event.deltaY * deltaModeScale
+    let zoomFactor = Math.exp(-delta * 0.0015)
+    zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
+    const nextZoom = Math.min(2, Math.max(0.35, minimapZoom * zoomFactor))
+    const nextView = getMinimapView(fractalType, minimapCenter, nextZoom, minimapIter, pixelW, pixelH)
+    const nextScale = scaleFor(nextView.zoom, pixelW, pixelH)
+
+    const nextCenter = {
+      centerX: anchor.x - (px - pixelW / 2) * nextScale,
+      centerY: anchor.y - (py - pixelH / 2) * nextScale,
+    }
+
+    setMinimapZoom(nextZoom)
+    setMinimapCenter(nextCenter)
+    setView((prev) => constrainMainView(prev, { ...nextView, ...nextCenter }))
+  }
+
+  const resetMinimap = () => {
+    const nextCenter = getDefaultMinimapCenter(fractalType)
+    setMinimapCenter(nextCenter)
+    setMinimapZoom(DEFAULT_MINIMAP_ZOOM)
+    setView((prev) =>
+      constrainMainView(
+        prev,
+        getMinimapView(
+          fractalType,
+          nextCenter,
+          DEFAULT_MINIMAP_ZOOM,
+          minimapIter,
+          MINIMAP_ASPECT_WIDTH,
+          MINIMAP_ASPECT_HEIGHT,
+        ),
+      ),
+    )
+  }
+
+  const tipText =
+    'Drag the viewport box to move the main view. Drag the minimap background to pan it. Wheel zooms both canvases.'
   const minimapBounds = getViewBounds(
-    getMinimapView(fractalType, minimapZoom, minimapIter, 4, 3),
-    4,
-    3,
+    getMinimapView(
+      fractalType,
+      minimapCenter,
+      minimapZoom,
+      minimapIter,
+      MINIMAP_ASPECT_WIDTH,
+      MINIMAP_ASPECT_HEIGHT,
+    ),
+    MINIMAP_ASPECT_WIDTH,
+    MINIMAP_ASPECT_HEIGHT,
   )
 
   return (
@@ -533,6 +770,11 @@ function App() {
               <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
             </div>
             <div className="minimap-settings">
+              <div className="controls-row">
+                <button className="btn ghost" onClick={resetMinimap}>
+                  Reset Minimap
+                </button>
+              </div>
               <label className="slider compact">
                 <span>Minimap zoom</span>
                 <input
@@ -558,6 +800,17 @@ function App() {
                 <span className="value">{minimapIter}</span>
               </label>
             </div>
+            <canvas
+              ref={minimapRef}
+              className="minimap"
+              onPointerDown={handleMinimapPointerDown}
+              onPointerMove={handleMinimapPointerMove}
+              onPointerUp={handleMinimapPointerUp}
+              onPointerCancel={handleMinimapPointerUp}
+              onWheel={handleMinimapWheel}
+              role="img"
+              aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} minimap`}
+            />
             <div className="minimap-info" aria-label="Minimap bounds">
               <div>
                 <span>Min X</span>
@@ -576,24 +829,6 @@ function App() {
                 <strong>{roundCoord(minimapBounds.maxY)}</strong>
               </div>
             </div>
-            <canvas
-              ref={minimapRef}
-              className="minimap"
-              onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture(event.pointerId)
-                handleMinimapPointer(event)
-              }}
-              onPointerMove={(event) => {
-                if (event.buttons === 1) handleMinimapPointer(event)
-              }}
-              onPointerUp={(event) => {
-                if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                  event.currentTarget.releasePointerCapture(event.pointerId)
-                }
-              }}
-              role="img"
-              aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} minimap`}
-            />
             <p className="panel-note">{tipText}</p>
           </div>
         </aside>
