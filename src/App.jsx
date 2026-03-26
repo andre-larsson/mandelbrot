@@ -624,6 +624,20 @@ function App() {
     const delta = event.deltaY * deltaModeScale
     let zoomFactor = Math.exp(-delta * 0.0015)
     zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
+
+    if (minimapMode === 'viewport') {
+      setView((prev) => {
+        const nextZoom = quantizeZoom(prev.zoom * zoomFactor)
+        return constrainMainView({
+          ...prev,
+          zoom: nextZoom,
+          centerX: anchor.x,
+          centerY: anchor.y,
+        })
+      })
+      return
+    }
+
     const nextZoom = quantizeZoom(minimapZoom * zoomFactor)
     const nextView = getMinimapView(fractalType, minimapCenter, nextZoom, minimapIter, pixelW, pixelH)
     const nextScale = scaleFor(nextView.zoom, pixelW, pixelH)
@@ -810,7 +824,7 @@ function App() {
                   type="number"
                   min="0.000001"
                   step="0.01"
-                  value={minimapZoom}
+                  value={Number(minimapZoom.toFixed(2))}
                   onChange={(event) => {
                     const nextValue = Number(event.target.value)
                     if (Number.isFinite(nextValue) && nextValue > 0) {
