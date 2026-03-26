@@ -46,6 +46,7 @@ const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 const PAN_SWIPE_MULTIPLIER = 1.7
 const MINIMAP_MAX_ITER = 180
+const DEFAULT_MINIMAP_ZOOM = 0.7
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -200,6 +201,16 @@ function renderFractalImageData(ctx, pixelW, pixelH, renderView, fractalType, co
   ctx.putImageData(img, 0, 0)
 }
 
+function getMinimapView(fractalType, zoomFactor, maxIter) {
+  const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
+  return {
+    centerX: base.centerX,
+    centerY: base.centerY,
+    zoom: Math.max(0.22, base.zoom * zoomFactor),
+    maxIter,
+  }
+}
+
 function App() {
   const canvasRef = useRef(null)
   const minimapRef = useRef(null)
@@ -249,6 +260,8 @@ function App() {
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
   const [isDragging, setIsDragging] = useState(false)
+  const [minimapZoom, setMinimapZoom] = useState(DEFAULT_MINIMAP_ZOOM)
+  const [minimapIter, setMinimapIter] = useState(MINIMAP_MAX_ITER)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -640,13 +653,7 @@ function App() {
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
 
-    const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    const minimapView = {
-      centerX: base.centerX,
-      centerY: base.centerY,
-      zoom: Math.max(0.22, base.zoom * 0.35),
-      maxIter: MINIMAP_MAX_ITER,
-    }
+    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter)
 
     renderFractalImageData(ctx, pixelW, pixelH, minimapView, fractalType, colorScheme, juliaC)
 
@@ -678,7 +685,7 @@ function App() {
     ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
     ctx.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y)
     ctx.restore()
-  }, [fractalType, colorScheme, juliaC, view, size])
+  }, [fractalType, colorScheme, juliaC, view, size, minimapZoom, minimapIter])
 
   const screenToComplex = (rect, x, y, viewLike) => {
     const pixelW = rect.width * (window.devicePixelRatio || 1)
@@ -937,13 +944,7 @@ function App() {
     const dpr = window.devicePixelRatio || 1
     const pixelW = Math.max(1, Math.floor(rect.width * dpr))
     const pixelH = Math.max(1, Math.floor(rect.height * dpr))
-    const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    const minimapView = {
-      centerX: base.centerX,
-      centerY: base.centerY,
-      zoom: Math.max(0.22, base.zoom * 0.35),
-      maxIter: MINIMAP_MAX_ITER,
-    }
+    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter)
 
     const target = pixelToComplex(
       (event.clientX - rect.left) * dpr,
@@ -1068,6 +1069,32 @@ function App() {
               <span>Navigator</span>
               <strong>{FRACTALS[fractalType]?.label || 'Mandelbrot'}</strong>
             </div>
+            <div className="minimap-settings">
+              <label className="slider compact">
+                <span>Minimap zoom</span>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1.6"
+                  step="0.05"
+                  value={minimapZoom}
+                  onChange={(event) => setMinimapZoom(Number(event.target.value))}
+                />
+                <span className="value">{minimapZoom.toFixed(2)}x</span>
+              </label>
+              <label className="slider compact">
+                <span>Minimap detail</span>
+                <input
+                  type="range"
+                  min="80"
+                  max="500"
+                  step="20"
+                  value={minimapIter}
+                  onChange={(event) => setMinimapIter(Number(event.target.value))}
+                />
+                <span className="value">{minimapIter}</span>
+              </label>
+            </div>
             <canvas
               ref={minimapRef}
               className="minimap"
@@ -1131,6 +1158,10 @@ function App() {
             <div>
               <span>Navigation</span>
               <strong>Minimap + drag</strong>
+            </div>
+            <div>
+              <span>Minimap</span>
+              <strong>{minimapZoom.toFixed(2)}x / {minimapIter} iters</strong>
             </div>
             <div>
               <span>Tip</span>

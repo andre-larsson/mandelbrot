@@ -127,6 +127,15 @@
   gap: 12px;
 }
 
+.minimap-settings {
+  display: grid;
+  gap: 10px;
+}
+
+.slider.compact {
+  gap: 4px;
+}
+
 .panel-head {
   display: flex;
   justify-content: space-between;
