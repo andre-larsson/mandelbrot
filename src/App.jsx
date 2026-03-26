@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import './App.css'
 
 const DEFAULT_VIEW = {
@@ -227,7 +227,7 @@ function getMinimapView(fractalType, center, zoomFactor, maxIter, pixelW, pixelH
   return {
     centerX: center.centerX,
     centerY: center.centerY,
-    zoom: Math.max(0.22, baseZoom * zoomFactor),
+    zoom: quantizeZoom(baseZoom * zoomFactor),
     maxIter,
   }
 }
@@ -318,23 +318,6 @@ function App() {
     observer.observe(parent)
     return () => observer.disconnect()
   }, [])
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    const minimap = minimapRef.current
-    if (!canvas || !minimap) return
-
-    const onMainWheel = (event) => handleWheel(event)
-    const onMinimapWheel = (event) => handleMinimapWheel(event)
-
-    canvas.addEventListener('wheel', onMainWheel, { passive: false })
-    minimap.addEventListener('wheel', onMinimapWheel, { passive: false })
-
-    return () => {
-      canvas.removeEventListener('wheel', onMainWheel)
-      minimap.removeEventListener('wheel', onMinimapWheel)
-    }
-  }, [view, minimapCenter, minimapZoom, minimapIter, fractalType, size, colorScheme, juliaC])
 
   const getMinimapViewForBounds = () =>
     getMinimapView(
@@ -460,14 +443,14 @@ function App() {
     updateCenterFromScreen(rect, event.clientX - rect.left, event.clientY - rect.top, zoomFactor)
   }
 
-  const handleWheel = (event) => {
+  const handleWheel = useEffectEvent((event) => {
     event.preventDefault()
     const deltaModeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
     const delta = event.deltaY * deltaModeScale
     let zoomFactor = Math.exp(-delta * 0.0015)
     zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
     updateCenterFromPointer(event, zoomFactor)
-  }
+  })
 
   const zoomIn = () => {
     setView((prev) =>
@@ -481,9 +464,17 @@ function App() {
     )
   }
 
+  const zoomMinimapIn = () => {
+    setMinimapZoom((prev) => quantizeZoom(prev * ZOOM_STEP_FACTOR))
+  }
+
+  const zoomMinimapOut = () => {
+    setMinimapZoom((prev) => quantizeZoom(prev / ZOOM_STEP_FACTOR))
+  }
+
   const reset = () => {
     const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
-    setView((prev) => constrainMainView({
+    setView(() => constrainMainView({
       ...base,
       zoom: quantizeZoom(base.zoom),
       maxIter: DEFAULT_VIEW.maxIter,
@@ -619,7 +610,7 @@ function App() {
     minimapDragRef.current.active = false
   }
 
-  const handleMinimapWheel = (event) => {
+  const handleMinimapWheel = useEffectEvent((event) => {
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
     const dpr = window.devicePixelRatio || 1
@@ -633,7 +624,7 @@ function App() {
     const delta = event.deltaY * deltaModeScale
     let zoomFactor = Math.exp(-delta * 0.0015)
     zoomFactor = Math.min(5, Math.max(0.2, zoomFactor))
-    const nextZoom = Math.min(2, Math.max(0.35, minimapZoom * zoomFactor))
+    const nextZoom = quantizeZoom(minimapZoom * zoomFactor)
     const nextView = getMinimapView(fractalType, minimapCenter, nextZoom, minimapIter, pixelW, pixelH)
     const nextScale = scaleFor(nextView.zoom, pixelW, pixelH)
 
@@ -645,7 +636,21 @@ function App() {
     setMinimapZoom(nextZoom)
     setMinimapCenter(nextCenter)
     setView((prev) => constrainMainView(prev, { ...nextView, ...nextCenter }))
-  }
+  })
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const minimap = minimapRef.current
+    if (!canvas || !minimap) return
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    minimap.addEventListener('wheel', handleMinimapWheel, { passive: false })
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel)
+      minimap.removeEventListener('wheel', handleMinimapWheel)
+    }
+  }, [])
 
   const resetMinimap = () => {
     const nextCenter = getDefaultMinimapCenter(fractalType)
@@ -792,30 +797,27 @@ function App() {
                 <button className="btn ghost" onClick={resetMinimap}>
                   Reset Minimap
                 </button>
-                <button
-                  className={`btn ghost ${minimapMode === 'viewport' ? 'active' : ''}`}
-                  onClick={() => setMinimapMode('viewport')}
-                >
-                  Move Viewport
+                <button className="btn ghost" onClick={zoomMinimapOut}>
+                  Minimap -
                 </button>
-                <button
-                  className={`btn ghost ${minimapMode === 'minimap' ? 'active' : ''}`}
-                  onClick={() => setMinimapMode('minimap')}
-                >
-                  Move Minimap
+                <button className="btn ghost" onClick={zoomMinimapIn}>
+                  Minimap +
                 </button>
               </div>
-              <label className="slider compact">
+              <label className="picker small">
                 <span>Minimap zoom</span>
                 <input
-                  type="range"
-                  min="0.35"
-                  max="2"
-                  step="0.05"
+                  type="number"
+                  min="0.000001"
+                  step="0.01"
                   value={minimapZoom}
-                  onChange={(event) => setMinimapZoom(Number(event.target.value))}
+                  onChange={(event) => {
+                    const nextValue = Number(event.target.value)
+                    if (Number.isFinite(nextValue) && nextValue > 0) {
+                      setMinimapZoom(quantizeZoom(nextValue))
+                    }
+                  }}
                 />
-                <span className="value">{minimapZoom.toFixed(2)}x</span>
               </label>
               <label className="slider compact">
                 <span>Minimap detail</span>
@@ -840,6 +842,20 @@ function App() {
               role="img"
               aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} minimap`}
             />
+            <div className="mode-toggle" aria-label="Navigator mode">
+              <button
+                className={`mode-toggle-option ${minimapMode === 'viewport' ? 'active' : ''}`}
+                onClick={() => setMinimapMode('viewport')}
+              >
+                Move Viewport
+              </button>
+              <button
+                className={`mode-toggle-option ${minimapMode === 'minimap' ? 'active' : ''}`}
+                onClick={() => setMinimapMode('minimap')}
+              >
+                Move Minimap
+              </button>
+            </div>
             <div className="minimap-info" aria-label="Minimap bounds">
               <div>
                 <span>Min X</span>
