@@ -132,6 +132,30 @@
   gap: 10px;
 }
 
+.minimap-info {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(6, 12, 23, 0.72);
+  border: 1px solid rgba(137, 180, 255, 0.14);
+}
+
+.minimap-info span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #89b4ff;
+}
+
+.minimap-info strong {
+  font-size: 0.98rem;
+  color: #e9f2ff;
+}
+
 .slider.compact {
   gap: 4px;
 }

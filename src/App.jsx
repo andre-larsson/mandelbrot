@@ -45,7 +45,7 @@ const ZOOM_QUANT_STEP = 1.015
 const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
 const MINIMAP_MAX_ITER = 180
-const DEFAULT_MINIMAP_ZOOM = 0.7
+const DEFAULT_MINIMAP_ZOOM = 1
 
 function hslToRgb(h, s, l) {
   const c = (1 - Math.abs(2 * l - 1)) * s
@@ -208,6 +208,22 @@ function getMinimapView(fractalType, zoomFactor, maxIter) {
     zoom: Math.max(0.22, base.zoom * zoomFactor),
     maxIter,
   }
+}
+
+function getViewBounds(renderView, pixelW, pixelH) {
+  const scale = scaleFor(renderView.zoom, pixelW, pixelH)
+  const halfW = (pixelW / 2) * scale
+  const halfH = (pixelH / 2) * scale
+  return {
+    minX: renderView.centerX - halfW,
+    maxX: renderView.centerX + halfW,
+    minY: renderView.centerY - halfH,
+    maxY: renderView.centerY + halfH,
+  }
+}
+
+function roundCoord(value) {
+  return value.toFixed(2)
 }
 
 function App() {
@@ -716,6 +732,11 @@ function App() {
   }
 
   const tipText = 'Use the minimap to reposition. Use the mouse wheel over the main canvas to zoom.'
+  const minimapBounds = getViewBounds(
+    getMinimapView(fractalType, minimapZoom, minimapIter),
+    4,
+    3,
+  )
 
   return (
     <div className="page">
@@ -848,6 +869,24 @@ function App() {
                 />
                 <span className="value">{minimapIter}</span>
               </label>
+            </div>
+            <div className="minimap-info" aria-label="Minimap bounds">
+              <div>
+                <span>Min X</span>
+                <strong>{roundCoord(minimapBounds.minX)}</strong>
+              </div>
+              <div>
+                <span>Max X</span>
+                <strong>{roundCoord(minimapBounds.maxX)}</strong>
+              </div>
+              <div>
+                <span>Min Y</span>
+                <strong>{roundCoord(minimapBounds.minY)}</strong>
+              </div>
+              <div>
+                <span>Max Y</span>
+                <strong>{roundCoord(minimapBounds.maxY)}</strong>
+              </div>
             </div>
             <canvas
               ref={minimapRef}
