@@ -44,7 +44,6 @@ const COLOR_SCHEMES = {
   neon: { label: 'Neon' },
 }
 
-const PAN_CACHE_FACTOR = 2
 const ZOOM_QUANT_STEP = 1.015
 const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
@@ -242,23 +241,6 @@ function roundCoord(value) {
 function App() {
   const canvasRef = useRef(null)
   const minimapRef = useRef(null)
-  const renderIdRef = useRef(0)
-  const cacheRef = useRef({
-    canvas: null,
-    ctx: null,
-    width: 0,
-    height: 0,
-    dpr: 1,
-    zoom: null,
-    maxIter: null,
-    fractalType: null,
-    colorScheme: null,
-    juliaC: null,
-    smoothBuffer: null,
-    hasCompleteFrame: false,
-    centerX: 0,
-    centerY: 0,
-  })
 
   const [fractalType, setFractalType] = useState('mandelbrot')
   const [colorScheme, setColorScheme] = useState('aurora')
@@ -288,279 +270,6 @@ function App() {
     return () => observer.disconnect()
   }, [])
 
-  const ensureCache = (pixelW, pixelH, dpr, nextView, nextFractalType, nextColorScheme, nextJuliaC) => {
-    const cache = cacheRef.current
-    const cacheW = Math.floor(pixelW * PAN_CACHE_FACTOR)
-    const cacheH = Math.floor(pixelH * PAN_CACHE_FACTOR)
-
-    const needsNewCanvas =
-      !cache.canvas || cache.width !== cacheW || cache.height !== cacheH || cache.dpr !== dpr
-
-    const needsGeometryReset =
-      needsNewCanvas ||
-      cache.zoom !== nextView.zoom ||
-      cache.maxIter !== nextView.maxIter ||
-      cache.fractalType !== nextFractalType ||
-      !cache.juliaC ||
-      cache.juliaC.re !== nextJuliaC.re ||
-      cache.juliaC.im !== nextJuliaC.im
-
-    if (needsGeometryReset) {
-      const off = document.createElement('canvas')
-      off.width = cacheW
-      off.height = cacheH
-      const ctx = off.getContext('2d', { alpha: false })
-
-      cacheRef.current = {
-        canvas: off,
-        ctx,
-        width: cacheW,
-        height: cacheH,
-        dpr,
-        zoom: nextView.zoom,
-        maxIter: nextView.maxIter,
-        fractalType: nextFractalType,
-        colorScheme: nextColorScheme,
-        juliaC: { ...nextJuliaC },
-        smoothBuffer: new Float32Array(cacheW * cacheH),
-        hasCompleteFrame: false,
-        centerX: nextView.centerX,
-        centerY: nextView.centerY,
-      }
-
-      return { reset: true, recolorOnly: false }
-    }
-
-    const recolorOnly = cache.colorScheme !== nextColorScheme
-    if (recolorOnly) {
-      cache.colorScheme = nextColorScheme
-    }
-
-    return { reset: false, recolorOnly }
-  }
-
-  const paintRectFromSmooth = (targetCtx, rect, nextColorScheme, maxIter) => {
-    const cache = cacheRef.current
-    if (!cache.smoothBuffer) return
-
-    const img = targetCtx.createImageData(rect.w, rect.h)
-    const data = img.data
-
-    for (let j = 0; j < rect.h; j += 1) {
-      const py = rect.y + j
-      for (let i = 0; i < rect.w; i += 1) {
-        const px = rect.x + i
-        const sourceIndex = py * cache.width + px
-        const offset = (j * rect.w + i) * 4
-        const smooth = cache.smoothBuffer[sourceIndex]
-
-        if (smooth < 0) {
-          data[offset] = 5
-          data[offset + 1] = 10
-          data[offset + 2] = 16
-          data[offset + 3] = 255
-        } else {
-          const [r, g, b] = colorForT(smooth / maxIter, nextColorScheme)
-          data[offset] = r
-          data[offset + 1] = g
-          data[offset + 2] = b
-          data[offset + 3] = 255
-        }
-      }
-    }
-
-    targetCtx.putImageData(img, rect.x, rect.y)
-  }
-
-  const repaintEntireCache = (nextColorScheme, maxIter) => {
-    const cache = cacheRef.current
-    if (!cache.ctx) return
-    paintRectFromSmooth(cache.ctx, { x: 0, y: 0, w: cache.width, h: cache.height }, nextColorScheme, maxIter)
-  }
-
-  const computeRect = (targetCtx, rect, pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC) => {
-    const cache = cacheRef.current
-    const scale = scaleFor(nextView.zoom, pixelW, pixelH)
-    const halfCacheW = cache.width / 2
-    const halfCacheH = cache.height / 2
-
-    for (let j = 0; j < rect.h; j += 1) {
-      const py = rect.y + j
-      const cy = (py - halfCacheH) * scale + cache.centerY
-      for (let i = 0; i < rect.w; i += 1) {
-        const px = rect.x + i
-        const cx = (px - halfCacheW) * scale + cache.centerX
-        const { iter, zx, zy } = iterateEscape(cx, cy, nextView.maxIter, nextFractalType, nextJuliaC)
-        const bufferIndex = py * cache.width + px
-
-        if (iter >= nextView.maxIter) {
-          cache.smoothBuffer[bufferIndex] = -1
-        } else {
-          const logZn = Math.log(zx * zx + zy * zy) / 2
-          const nu = Math.log(logZn / Math.LN2) / Math.LN2
-          cache.smoothBuffer[bufferIndex] = iter + 1 - nu
-        }
-      }
-    }
-
-    paintRectFromSmooth(targetCtx, rect, nextColorScheme, nextView.maxIter)
-  }
-
-  const fillCache = (
-    pixelW,
-    pixelH,
-    nextView,
-    nextFractalType,
-    nextColorScheme,
-    nextJuliaC,
-    { priorityRects = null, onDone = null } = {},
-  ) => {
-    const cache = cacheRef.current
-    if (!cache.canvas || !cache.ctx) return
-    if (!cache.smoothBuffer || cache.smoothBuffer.length !== cache.width * cache.height) {
-      cache.smoothBuffer = new Float32Array(cache.width * cache.height)
-      cache.smoothBuffer.fill(-1)
-    }
-
-    const ctx = cache.ctx
-    ctx.imageSmoothingEnabled = false
-
-    renderIdRef.current += 1
-    const renderId = renderIdRef.current
-    const allRects = priorityRects || [{ x: 0, y: 0, w: cache.width, h: cache.height }]
-    const chunkRows = nextView.maxIter <= 260 ? 128 : 32
-
-    cache.hasCompleteFrame = false
-
-    const processNext = () => {
-      if (renderId !== renderIdRef.current) return
-      const rect = allRects.find((item) => item.h > 0)
-      if (!rect) {
-        cache.hasCompleteFrame = true
-        if (typeof onDone === 'function') onDone()
-        return
-      }
-
-      const h = Math.min(chunkRows, rect.h)
-      const slice = { x: rect.x, y: rect.y, w: rect.w, h }
-
-      computeRect(ctx, slice, pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC)
-
-      rect.y += h
-      rect.h -= h
-
-      requestAnimationFrame(processNext)
-    }
-
-    processNext()
-  }
-
-  const updateCacheForPan = (
-    pixelW,
-    pixelH,
-    nextView,
-    nextFractalType,
-    nextColorScheme,
-    nextJuliaC,
-    { onDone = null } = {},
-  ) => {
-    renderIdRef.current += 1
-
-    const cache = cacheRef.current
-    if (!cache.canvas || !cache.ctx) return { usedCache: false }
-    if (
-      cache.zoom !== nextView.zoom ||
-      cache.maxIter !== nextView.maxIter ||
-      cache.fractalType !== nextFractalType ||
-      !cache.juliaC ||
-      cache.juliaC.re !== nextJuliaC.re ||
-      cache.juliaC.im !== nextJuliaC.im ||
-      !cache.hasCompleteFrame
-    ) {
-      return { usedCache: false }
-    }
-
-    const scale = scaleFor(nextView.zoom, pixelW, pixelH)
-    const dx = Math.round((cache.centerX - nextView.centerX) / scale)
-    const dy = Math.round((cache.centerY - nextView.centerY) / scale)
-
-    if (Math.abs(dx) > cache.width * 0.45 || Math.abs(dy) > cache.height * 0.45) {
-      cache.centerX = nextView.centerX
-      cache.centerY = nextView.centerY
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, { onDone })
-      return { usedCache: true }
-    }
-
-    if (dx === 0 && dy === 0) {
-      return { usedCache: true }
-    }
-
-    const ctx = cache.ctx
-    ctx.imageSmoothingEnabled = false
-    ctx.save()
-    ctx.globalCompositeOperation = 'copy'
-    ctx.drawImage(cache.canvas, dx, dy)
-    ctx.restore()
-
-    if (cache.smoothBuffer) {
-      const w = cache.width
-      const h = cache.height
-      const shifted = new Float32Array(w * h)
-      shifted.fill(-1)
-
-      const xStart = Math.max(0, dx)
-      const xEnd = Math.min(w, w + dx)
-      const copyLen = xEnd - xStart
-
-      if (copyLen > 0) {
-        for (let y = 0; y < h; y += 1) {
-          const sy = y - dy
-          if (sy < 0 || sy >= h) continue
-
-          const dstRow = y * w
-          const srcRow = sy * w
-          const dstStart = dstRow + xStart
-          const srcStart = srcRow + (xStart - dx)
-
-          shifted.set(cache.smoothBuffer.subarray(srcStart, srcStart + copyLen), dstStart)
-        }
-      }
-
-      cache.smoothBuffer = shifted
-    }
-
-    const rects = []
-
-    if (dx > 0) rects.push({ x: 0, y: 0, w: dx, h: cache.height })
-    else if (dx < 0) rects.push({ x: cache.width + dx, y: 0, w: -dx, h: cache.height })
-
-    if (dy > 0) rects.push({ x: 0, y: 0, w: cache.width, h: dy })
-    else if (dy < 0) rects.push({ x: 0, y: cache.height + dy, w: cache.width, h: -dy })
-
-    cache.centerX = nextView.centerX
-    cache.centerY = nextView.centerY
-
-    const clamped = rects
-      .map((rect) => ({
-        x: Math.max(0, Math.floor(rect.x)),
-        y: Math.max(0, Math.floor(rect.y)),
-        w: Math.max(0, Math.floor(rect.w)),
-        h: Math.max(0, Math.floor(rect.h)),
-      }))
-      .filter((rect) => rect.w > 0 && rect.h > 0)
-
-    if (clamped.length) {
-      fillCache(pixelW, pixelH, nextView, nextFractalType, nextColorScheme, nextJuliaC, {
-        priorityRects: clamped,
-        onDone,
-      })
-    } else if (typeof onDone === 'function') {
-      onDone()
-    }
-
-    return { usedCache: true }
-  }
-
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !size.width || !size.height) return
@@ -570,44 +279,10 @@ function App() {
     const pixelH = Math.floor(size.height * dpr)
     if (canvas.width !== pixelW) canvas.width = pixelW
     if (canvas.height !== pixelH) canvas.height = pixelH
-
-    const drawViewportFromCache = () => {
-      const ctx = canvas.getContext('2d', { alpha: false })
-      if (!ctx) return
-      ctx.imageSmoothingEnabled = false
-
-      const cache = cacheRef.current
-      if (!cache.canvas) return
-
-      const srcX = Math.floor((cache.width - pixelW) / 2)
-      const srcY = Math.floor((cache.height - pixelH) / 2)
-      ctx.clearRect(0, 0, pixelW, pixelH)
-      ctx.drawImage(cache.canvas, srcX, srcY, pixelW, pixelH, 0, 0, pixelW, pixelH)
-    }
-
-    const { reset, recolorOnly } = ensureCache(
-      pixelW,
-      pixelH,
-      dpr,
-      view,
-      fractalType,
-      colorScheme,
-      juliaC,
-    )
-
-    if (reset) {
-      fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, { onDone: drawViewportFromCache })
-    } else if (recolorOnly) {
-      repaintEntireCache(colorScheme, view.maxIter)
-      drawViewportFromCache()
-    } else {
-      const { usedCache } = updateCacheForPan(pixelW, pixelH, view, fractalType, colorScheme, juliaC, {
-        onDone: drawViewportFromCache,
-      })
-      if (!usedCache) {
-        fillCache(pixelW, pixelH, view, fractalType, colorScheme, juliaC, { onDone: drawViewportFromCache })
-      }
-    }
+    const ctx = canvas.getContext('2d', { alpha: false })
+    if (!ctx) return
+    ctx.imageSmoothingEnabled = false
+    renderFractalImageData(ctx, pixelW, pixelH, view, fractalType, colorScheme, juliaC)
   }, [size, view, fractalType, colorScheme, juliaC])
 
   useEffect(() => {
@@ -758,8 +433,8 @@ function App() {
           <div className="sidebar-block">
             <p className="eyebrow">Escape-Time Explorer</p>
             <p className="lede">
-              The main canvas is now display-focused. Use the minimap to move across the set and
-              the mouse wheel over the main view to zoom in and out.
+              The main canvas now renders directly without cache reuse. Use the minimap to move
+              across the set and the mouse wheel over the main view to zoom in and out.
             </p>
           </div>
 
