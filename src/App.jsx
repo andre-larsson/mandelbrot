@@ -631,8 +631,6 @@ function App() {
         return constrainMainView({
           ...prev,
           zoom: nextZoom,
-          centerX: anchor.x,
-          centerY: anchor.y,
         })
       })
       return
