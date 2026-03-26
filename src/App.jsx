@@ -17,18 +17,22 @@ const FRACTALS = {
   mandelbrot: {
     label: 'Mandelbrot',
     defaultView: { centerX: -0.5, centerY: 0, zoom: 1 },
+    navigatorBounds: { minX: -2.3, maxX: 1.1, minY: -1.4, maxY: 1.4 },
   },
   julia: {
     label: 'Julia',
     defaultView: { centerX: 0, centerY: 0, zoom: 1.2 },
+    navigatorBounds: { minX: -1.8, maxX: 1.8, minY: -1.5, maxY: 1.5 },
   },
   burningShip: {
     label: 'Burning Ship',
     defaultView: { centerX: -0.45, centerY: -0.5, zoom: 1.8 },
+    navigatorBounds: { minX: -2.1, maxX: 1.2, minY: -2.2, maxY: 0.6 },
   },
   tricorn: {
     label: 'Tricorn',
     defaultView: { centerX: 0, centerY: 0, zoom: 1.2 },
+    navigatorBounds: { minX: -2.2, maxX: 2.2, minY: -1.8, maxY: 1.8 },
   },
 }
 
@@ -200,12 +204,21 @@ function renderFractalImageData(ctx, pixelW, pixelH, renderView, fractalType, co
   ctx.putImageData(img, 0, 0)
 }
 
-function getMinimapView(fractalType, zoomFactor, maxIter) {
-  const base = FRACTALS[fractalType]?.defaultView || FRACTALS.mandelbrot.defaultView
+function getNavigatorBounds(fractalType) {
+  return FRACTALS[fractalType]?.navigatorBounds || FRACTALS.mandelbrot.navigatorBounds
+}
+
+function getMinimapView(fractalType, zoomFactor, maxIter, pixelW, pixelH) {
+  const bounds = getNavigatorBounds(fractalType)
+  const boundsWidth = bounds.maxX - bounds.minX
+  const boundsHeight = bounds.maxY - bounds.minY
+  const scale = Math.max(boundsWidth / pixelW, boundsHeight / pixelH)
+  const baseZoom = 4 / (scale * Math.min(pixelW, pixelH))
+
   return {
-    centerX: base.centerX,
-    centerY: base.centerY,
-    zoom: Math.max(0.22, base.zoom * zoomFactor),
+    centerX: (bounds.minX + bounds.maxX) / 2,
+    centerY: (bounds.minY + bounds.maxY) / 2,
+    zoom: Math.max(0.22, baseZoom * zoomFactor),
     maxIter,
   }
 }
@@ -611,7 +624,7 @@ function App() {
     const ctx = canvas.getContext('2d', { alpha: false })
     if (!ctx) return
 
-    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter)
+    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter, pixelW, pixelH)
 
     renderFractalImageData(ctx, pixelW, pixelH, minimapView, fractalType, colorScheme, juliaC)
 
@@ -714,7 +727,7 @@ function App() {
     const dpr = window.devicePixelRatio || 1
     const pixelW = Math.max(1, Math.floor(rect.width * dpr))
     const pixelH = Math.max(1, Math.floor(rect.height * dpr))
-    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter)
+    const minimapView = getMinimapView(fractalType, minimapZoom, minimapIter, pixelW, pixelH)
 
     const target = pixelToComplex(
       (event.clientX - rect.left) * dpr,
@@ -733,7 +746,7 @@ function App() {
 
   const tipText = 'Use the minimap to reposition. Use the mouse wheel over the main canvas to zoom.'
   const minimapBounds = getViewBounds(
-    getMinimapView(fractalType, minimapZoom, minimapIter),
+    getMinimapView(fractalType, minimapZoom, minimapIter, 4, 3),
     4,
     3,
   )
@@ -850,7 +863,7 @@ function App() {
                 <input
                   type="range"
                   min="0.35"
-                  max="1.6"
+                  max="2"
                   step="0.05"
                   value={minimapZoom}
                   onChange={(event) => setMinimapZoom(Number(event.target.value))}
