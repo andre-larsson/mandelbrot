@@ -106,6 +106,12 @@
   color: #cfe3ff;
 }
 
+.btn.ghost.active {
+  background: rgba(111, 166, 255, 0.18);
+  border-color: rgba(143, 188, 255, 0.8);
+  color: #f3f7ff;
+}
+
 .slider {
   display: grid;
   gap: 6px;

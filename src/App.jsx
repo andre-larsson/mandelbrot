@@ -297,6 +297,7 @@ function App() {
   const [minimapZoom, setMinimapZoom] = useState(DEFAULT_MINIMAP_ZOOM)
   const [minimapIter, setMinimapIter] = useState(MINIMAP_MAX_ITER)
   const [minimapCenter, setMinimapCenter] = useState(getDefaultMinimapCenter('mandelbrot'))
+  const [minimapMode, setMinimapMode] = useState('viewport')
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -317,6 +318,23 @@ function App() {
     observer.observe(parent)
     return () => observer.disconnect()
   }, [])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const minimap = minimapRef.current
+    if (!canvas || !minimap) return
+
+    const onMainWheel = (event) => handleWheel(event)
+    const onMinimapWheel = (event) => handleMinimapWheel(event)
+
+    canvas.addEventListener('wheel', onMainWheel, { passive: false })
+    minimap.addEventListener('wheel', onMinimapWheel, { passive: false })
+
+    return () => {
+      canvas.removeEventListener('wheel', onMainWheel)
+      minimap.removeEventListener('wheel', onMinimapWheel)
+    }
+  }, [view, minimapCenter, minimapZoom, minimapIter, fractalType, size, colorScheme, juliaC])
 
   const getMinimapViewForBounds = () =>
     getMinimapView(
@@ -518,14 +536,14 @@ function App() {
     minimapDragRef.current = {
       active: true,
       pointerId: event.pointerId,
-      mode: insideViewport ? 'moveViewport' : 'panMinimap',
+      mode: minimapMode === 'minimap' ? 'panMinimap' : 'moveViewport',
       moved: false,
       startX: px,
       startY: py,
       startCenterX: minimapCenter.centerX,
       startCenterY: minimapCenter.centerY,
-      mainOffsetX: pointerComplex.x - view.centerX,
-      mainOffsetY: pointerComplex.y - view.centerY,
+      mainOffsetX: insideViewport ? pointerComplex.x - view.centerX : 0,
+      mainOffsetY: insideViewport ? pointerComplex.y - view.centerY : 0,
     }
   }
 
@@ -576,7 +594,7 @@ function App() {
     const pixelH = Math.max(1, Math.floor(rect.height * dpr))
     const minimapView = getMinimapView(fractalType, minimapCenter, minimapZoom, minimapIter, pixelW, pixelH)
 
-    if (!drag.moved && drag.mode === 'panMinimap') {
+    if (!drag.moved && drag.mode === 'moveViewport') {
       const target = pixelToComplex(
         (event.clientX - rect.left) * dpr,
         (event.clientY - rect.top) * dpr,
@@ -649,7 +667,7 @@ function App() {
   }
 
   const tipText =
-    'Drag the viewport box to move the main view. Drag the minimap background to pan it. Wheel zooms both canvases.'
+    'Use the toggle to switch between moving the main viewport and panning the minimap. Wheel zooms both canvases without scrolling the page.'
   const minimapBounds = getViewBounds(
     getMinimapView(
       fractalType,
@@ -774,6 +792,18 @@ function App() {
                 <button className="btn ghost" onClick={resetMinimap}>
                   Reset Minimap
                 </button>
+                <button
+                  className={`btn ghost ${minimapMode === 'viewport' ? 'active' : ''}`}
+                  onClick={() => setMinimapMode('viewport')}
+                >
+                  Move Viewport
+                </button>
+                <button
+                  className={`btn ghost ${minimapMode === 'minimap' ? 'active' : ''}`}
+                  onClick={() => setMinimapMode('minimap')}
+                >
+                  Move Minimap
+                </button>
               </div>
               <label className="slider compact">
                 <span>Minimap zoom</span>
@@ -807,7 +837,6 @@ function App() {
               onPointerMove={handleMinimapPointerMove}
               onPointerUp={handleMinimapPointerUp}
               onPointerCancel={handleMinimapPointerUp}
-              onWheel={handleMinimapWheel}
               role="img"
               aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} minimap`}
             />
@@ -837,7 +866,6 @@ function App() {
           <div className="canvas-frame">
             <canvas
               ref={canvasRef}
-              onWheel={handleWheel}
               role="img"
               aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} set`}
             />
