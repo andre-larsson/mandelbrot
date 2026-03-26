@@ -187,12 +187,7 @@ canvas {
   height: min(78vh, 760px);
   display: block;
   border-radius: 14px;
-  cursor: grab;
   touch-action: none;
-}
-
-canvas.dragging {
-  cursor: grabbing;
 }
 
 .meta {

@@ -44,7 +44,6 @@ const PAN_CACHE_FACTOR = 2
 const ZOOM_QUANT_STEP = 1.015
 const ZOOM_STEP_BUCKETS = 46
 const ZOOM_STEP_FACTOR = Math.pow(ZOOM_QUANT_STEP, ZOOM_STEP_BUCKETS)
-const PAN_SWIPE_MULTIPLIER = 1.7
 const MINIMAP_MAX_ITER = 180
 const DEFAULT_MINIMAP_ZOOM = 0.7
 
@@ -232,34 +231,11 @@ function App() {
     centerY: 0,
   })
 
-  const dragRef = useRef({
-    active: false,
-    pointerId: null,
-    moved: false,
-    startX: 0,
-    startY: 0,
-    startCenterX: 0,
-    startCenterY: 0,
-    startZoom: DEFAULT_VIEW.zoom,
-  })
-
-  const gestureRef = useRef({
-    pointers: new Map(),
-    mode: 'none',
-    startDist: 0,
-    startMid: { x: 0, y: 0 },
-    anchorComplex: { x: 0, y: 0 },
-    startView: DEFAULT_VIEW,
-    pinchMoved: false,
-    pinchStartedAt: 0,
-  })
-
   const [fractalType, setFractalType] = useState('mandelbrot')
   const [colorScheme, setColorScheme] = useState('aurora')
   const [juliaC, setJuliaC] = useState(DEFAULT_JULIA_C)
   const [view, setView] = useState(DEFAULT_VIEW)
   const [size, setSize] = useState({ width: 0, height: 0, dpr: 1 })
-  const [isDragging, setIsDragging] = useState(false)
   const [minimapZoom, setMinimapZoom] = useState(DEFAULT_MINIMAP_ZOOM)
   const [minimapIter, setMinimapIter] = useState(MINIMAP_MAX_ITER)
 
@@ -497,7 +473,7 @@ function App() {
     ctx.drawImage(cache.canvas, dx, dy)
     ctx.restore()
 
-    if (cache.smoothBuffer && !dragRef.current.active) {
+    if (cache.smoothBuffer) {
       const w = cache.width
       const h = cache.height
       const shifted = new Float32Array(w * h)
@@ -525,40 +501,6 @@ function App() {
     }
 
     const rects = []
-
-    if (dragRef.current.active) {
-      if (dx > 0) {
-        ctx.drawImage(cache.canvas, dx, 0, 1, cache.height, 0, 0, dx, cache.height)
-      } else if (dx < 0) {
-        ctx.drawImage(
-          cache.canvas,
-          cache.width + dx - 1,
-          0,
-          1,
-          cache.height,
-          cache.width + dx,
-          0,
-          -dx,
-          cache.height,
-        )
-      }
-
-      if (dy > 0) {
-        ctx.drawImage(cache.canvas, 0, dy, cache.width, 1, 0, 0, cache.width, dy)
-      } else if (dy < 0) {
-        ctx.drawImage(
-          cache.canvas,
-          0,
-          cache.height + dy - 1,
-          cache.width,
-          1,
-          0,
-          cache.height + dy,
-          cache.width,
-          -dy,
-        )
-      }
-    }
 
     if (dx > 0) rects.push({ x: 0, y: 0, w: dx, h: cache.height })
     else if (dx < 0) rects.push({ x: cache.width + dx, y: 0, w: -dx, h: cache.height })
@@ -687,12 +629,6 @@ function App() {
     ctx.restore()
   }, [fractalType, colorScheme, juliaC, view, size, minimapZoom, minimapIter])
 
-  const screenToComplex = (rect, x, y, viewLike) => {
-    const pixelW = rect.width * (window.devicePixelRatio || 1)
-    const pixelH = rect.height * (window.devicePixelRatio || 1)
-    return pixelToComplex(x * (window.devicePixelRatio || 1), y * (window.devicePixelRatio || 1), viewLike, pixelW, pixelH)
-  }
-
   const updateCenterFromScreen = (rect, x, y, zoomFactor) => {
     const dpr = window.devicePixelRatio || 1
     const pixelW = rect.width * dpr
@@ -719,188 +655,6 @@ function App() {
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
     updateCenterFromScreen(rect, event.clientX - rect.left, event.clientY - rect.top, zoomFactor)
-  }
-
-  const beginPinch = (rect, p1, p2) => {
-    const dx = p2.x - p1.x
-    const dy = p2.y - p1.y
-    const dist = Math.hypot(dx, dy) || 1
-    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
-
-    gestureRef.current.mode = 'pinch'
-    gestureRef.current.startDist = dist
-    gestureRef.current.startMid = mid
-    gestureRef.current.startView = view
-    gestureRef.current.anchorComplex = screenToComplex(rect, mid.x, mid.y, view)
-    gestureRef.current.pinchMoved = false
-    gestureRef.current.pinchStartedAt = performance.now()
-
-    dragRef.current.active = false
-    setIsDragging(true)
-  }
-
-  const handlePointerDown = (event) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    if (event.pointerType === 'mouse' && event.button !== 0) return
-
-    canvas.setPointerCapture(event.pointerId)
-
-    const rect = canvas.getBoundingClientRect()
-    const x = event.clientX - rect.left
-    const y = event.clientY - rect.top
-
-    const gesture = gestureRef.current
-    gesture.pointers.set(event.pointerId, { x, y })
-
-    if (gesture.pointers.size === 2) {
-      const [p1, p2] = Array.from(gesture.pointers.values())
-      beginPinch(rect, p1, p2)
-      return
-    }
-
-    gesture.mode = 'pan'
-    dragRef.current = {
-      active: true,
-      pointerId: event.pointerId,
-      moved: false,
-      startX: event.clientX,
-      startY: event.clientY,
-      startCenterX: view.centerX,
-      startCenterY: view.centerY,
-      startZoom: view.zoom,
-    }
-    setIsDragging(true)
-  }
-
-  const handlePointerMove = (event) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const rect = canvas.getBoundingClientRect()
-    const x = event.clientX - rect.left
-    const y = event.clientY - rect.top
-
-    const gesture = gestureRef.current
-    if (gesture.pointers.has(event.pointerId)) {
-      gesture.pointers.set(event.pointerId, { x, y })
-    }
-
-    if (gesture.mode === 'pinch' && gesture.pointers.size >= 2) {
-      const [p1, p2] = Array.from(gesture.pointers.values())
-      const dx = p2.x - p1.x
-      const dy = p2.y - p1.y
-      const dist = Math.hypot(dx, dy) || 1
-      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
-
-      const distDelta = Math.abs(dist - (gesture.startDist || 0))
-      const midDelta = Math.hypot(mid.x - gesture.startMid.x, mid.y - gesture.startMid.y)
-      if (distDelta > 8 || midDelta > 8) gesture.pinchMoved = true
-
-      const ratio = dist / (gesture.startDist || 1)
-      const nextZoom = quantizeZoom(Math.max(0.05, gesture.startView.zoom * ratio))
-      const dpr = window.devicePixelRatio || 1
-      const pixelW = rect.width * dpr
-      const pixelH = rect.height * dpr
-      const nextScale = scaleFor(nextZoom, pixelW, pixelH)
-
-      setView((prev) => ({
-        ...prev,
-        zoom: nextZoom,
-        centerX: gesture.anchorComplex.x - (mid.x - rect.width / 2) * nextScale,
-        centerY: gesture.anchorComplex.y - (mid.y - rect.height / 2) * nextScale,
-      }))
-      return
-    }
-
-    const drag = dragRef.current
-    if (!drag.active || drag.pointerId !== event.pointerId) return
-
-    const dx = (event.clientX - drag.startX) * PAN_SWIPE_MULTIPLIER
-    const dy = (event.clientY - drag.startY) * PAN_SWIPE_MULTIPLIER
-    if (!drag.moved && Math.hypot(dx, dy) > 3) drag.moved = true
-    if (!drag.moved) return
-
-    const dpr = window.devicePixelRatio || 1
-    const pixelW = rect.width * dpr
-    const pixelH = rect.height * dpr
-    const scale = scaleFor(drag.startZoom, pixelW, pixelH)
-
-    setView((prev) => ({
-      ...prev,
-      centerX: drag.startCenterX - dx * scale,
-      centerY: drag.startCenterY - dy * scale,
-    }))
-  }
-
-  const finishPointer = (event) => {
-    const canvas = canvasRef.current
-    const gesture = gestureRef.current
-    const rect = canvas?.getBoundingClientRect()
-
-    if (rect && gesture.pointers.has(event.pointerId)) {
-      gesture.pointers.set(event.pointerId, {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      })
-    }
-
-    const pointersBefore = Array.from(gesture.pointers.values())
-    const wasPinch = gesture.mode === 'pinch'
-    const wasTwoFingers = gesture.pointers.size === 2
-    const pinchMoved = gesture.pinchMoved
-    const pinchDurationMs = performance.now() - (gesture.pinchStartedAt || 0)
-
-    if (canvas?.hasPointerCapture(event.pointerId)) {
-      canvas.releasePointerCapture(event.pointerId)
-    }
-    gesture.pointers.delete(event.pointerId)
-
-    if (wasPinch && wasTwoFingers && !pinchMoved && pinchDurationMs < 280 && rect) {
-      const p1 = pointersBefore[0]
-      const p2 = pointersBefore[1]
-      updateCenterFromScreen(rect, (p1.x + p2.x) / 2, (p1.y + p2.y) / 2, 1 / ZOOM_STEP_FACTOR)
-    }
-
-    if (wasPinch) {
-      if (gesture.pointers.size >= 2) return
-      gesture.mode = gesture.pointers.size === 1 ? 'pan' : 'none'
-      dragRef.current.active = false
-      setIsDragging(false)
-      return
-    }
-
-    const drag = dragRef.current
-    if (!drag.active || drag.pointerId !== event.pointerId) {
-      if (gesture.pointers.size === 0) setIsDragging(false)
-      return
-    }
-
-    const didDrag = drag.moved
-    dragRef.current = {
-      active: false,
-      pointerId: null,
-      moved: false,
-      startX: 0,
-      startY: 0,
-      startCenterX: 0,
-      startCenterY: 0,
-      startZoom: view.zoom,
-    }
-
-    gesture.mode = gesture.pointers.size > 0 ? 'pan' : 'none'
-    setIsDragging(gesture.pointers.size > 0)
-
-    if (!didDrag) {
-      const zoomFactor =
-        event.pointerType === 'mouse' && event.shiftKey ? 1 / ZOOM_STEP_FACTOR : ZOOM_STEP_FACTOR
-      updateCenterFromPointer(event, zoomFactor)
-    }
-  }
-
-  const handleCanvasContextMenu = (event) => {
-    event.preventDefault()
-    updateCenterFromPointer(event, 1 / ZOOM_STEP_FACTOR)
   }
 
   const handleWheel = (event) => {
@@ -961,7 +715,7 @@ function App() {
     }))
   }
 
-  const tipText = 'Click or drag in the minimap to recenter. Use the main canvas to inspect.'
+  const tipText = 'Use the minimap to reposition. Use the mouse wheel over the main canvas to zoom.'
 
   return (
     <div className="page">
@@ -970,8 +724,8 @@ function App() {
           <div className="sidebar-block">
             <p className="eyebrow">Escape-Time Explorer</p>
             <p className="lede">
-              The main view now renders at one quality level. Pan-cache remains for same-zoom
-              movement, and the minimap handles larger jumps across the set.
+              The main canvas is now display-focused. Use the minimap to move across the set and
+              the mouse wheel over the main view to zoom in and out.
             </p>
           </div>
 
@@ -1121,12 +875,6 @@ function App() {
           <div className="canvas-frame">
             <canvas
               ref={canvasRef}
-              className={isDragging ? 'dragging' : ''}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={finishPointer}
-              onPointerCancel={finishPointer}
-              onContextMenu={handleCanvasContextMenu}
               onWheel={handleWheel}
               role="img"
               aria-label={`${FRACTALS[fractalType]?.label || 'Fractal'} set`}
@@ -1157,7 +905,7 @@ function App() {
             </div>
             <div>
               <span>Navigation</span>
-              <strong>Minimap + drag</strong>
+              <strong>Minimap + wheel</strong>
             </div>
             <div>
               <span>Minimap</span>
