@@ -512,9 +512,9 @@ function App() {
               <span>Iterations</span>
               <input
                 type="range"
-                min="100"
+                min="1"
                 max="2000"
-                step="50"
+                step="1"
                 value={view.maxIter}
                 onChange={(event) =>
                   setView((prev) => ({
