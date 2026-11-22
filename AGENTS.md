@@ -5,6 +5,10 @@ This is a Vite + React single-page app for exploring the Mandelbrot set.
 - `src/main.jsx`: React entry point.
 - `src/App.jsx`: core rendering logic and UI controls.
 - `src/App.css`, `src/index.css`: component and global styles.
+- `patterns.html` + `src/patterns/`: the "circles and spirals" explainer page (second Vite entry, listed in `vite.config.js`).
+  - `dynamics.js`: escape time, cycle detection and multipliers for z -> z^2 + c (pure functions).
+  - `plot.js`: canvas views, colors and the chunked row renderer shared by the figures.
+  - `*Figure.jsx`: one component per interactive figure; `PatternsPage.jsx` holds the text.
 - `public/`: static assets copied at build time.
 - `.github/workflows/pages.yml`: GitHub Pages build/deploy pipeline.
 - `dist/`: production build output (generated; do not edit directly).
