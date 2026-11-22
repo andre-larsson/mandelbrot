@@ -14,7 +14,7 @@ This is a Vite + React single-page app for exploring the Mandelbrot set.
 - `dist/`: production build output (generated; do not edit directly).
 
 ## Build, Test, and Development Commands
-Use Node 20+ (CI uses Node 20).
+Use Node 24 (the version CI uses).
 - `npm ci`: install dependencies from lockfile (preferred for clean setups/CI).
 - `npm run dev`: start Vite dev server with HMR.
 - `npm run build`: create production bundle in `dist/`.
