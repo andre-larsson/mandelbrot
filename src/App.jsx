@@ -708,6 +708,9 @@ function App() {
               The main canvas now renders directly without cache reuse. Use the minimap to move
               across the set and the mouse wheel over the main view to zoom in and out.
             </p>
+            <a className="explainer-link" href="./patterns.html">
+              Why so many circles and spirals? →
+            </a>
           </div>
 
           <div className="sidebar-block controls">
